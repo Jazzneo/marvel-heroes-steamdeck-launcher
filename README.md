@@ -1,6 +1,6 @@
 # MH Launcher – Marvel Heroes on Linux & Steam Deck
 
-![Play screen](docs/screenshots/play.png)
+![MH Launcher](docs/branding/banner.png)
 
 **[⬇ Download the latest release](https://github.com/Jazzneo/marvel-heroes-steamdeck-launcher/releases/latest)**: get `MHLauncher-linux-x64.tar.xz`. It's ready to run, with Python and the MHServerEmu server bundled. Works on Steam Deck (SteamOS), Bazzite and other x86-64 Linux distros.
 
@@ -19,6 +19,8 @@ It doesn't need Apache. The launcher has its own small "login bridge" that does 
 ---
 
 ## Screenshots
+
+![Play screen](docs/screenshots/play.png)
 
 | Mods | Install a mod |
 | --- | --- |
