@@ -11,6 +11,7 @@ MH Launcher is an all-in-one launcher for **MHServerEmu**, the Marvel Heroes pri
 * **Create accounts** (and optionally give them admin rights) without touching a console or a website.
 * **Pick your Marvel Heroes EXE**, or let the launcher search for it. It checks that the client is version 1.52.0.1700 and copies the game data the server needs.
 * Run the Windows game through **Proton** (Valve's Proton, Proton Experimental, GE-Proton, or `umu-run`) or **Wine**.
+* **Install mods** (costumes, icons, text, sound packs) from a controller-friendly **Mods** tab, powered by [MHO Extended Mod Manager](https://github.com/leeper48/MHO-UPK-Tools).
 * Play **with a controller** on Steam Deck. Navigation, an on-screen keyboard, a file browser and Gaming Mode support are all built in.
 
 It doesn't need Apache. The launcher has its own small "login bridge" that does what Apache does in the Windows setup: it serves `SiteConfig.xml` and forwards logins to the server.
@@ -18,6 +19,10 @@ It doesn't need Apache. The launcher has its own small "login bridge" that does 
 ---
 
 ## Screenshots
+
+| Mods | Install a mod |
+| --- | --- |
+| ![Mods](docs/screenshots/mods.png) | ![Install a mod](docs/screenshots/mods-install.png) |
 
 | Accounts | Server | Game client |
 | --- | --- | --- |
@@ -74,9 +79,24 @@ The touchscreen and trackpads work too. Text fields open a controller-friendly k
 
 * **Play** – the big PLAY button, server/account/client status, and a "ready check" with Fix buttons.
 * **Accounts** – saved accounts (choose the active one, Y to remove), Sign in, Create account.
+* **Mods** – your mod list: **A** turns a mod on/off, move mods higher/lower (the higher mod wins when two change the same file), **Install mod…** (newest downloads first, or Browse), **Apply changes**, **Remove**, and **Full Mod Manager** for the editor and Nexus features. See [Mods](#mods) below.
 * **Server** – ON/OFF, live log, a console command box (e.g. `!commands`, `!account userlevel me@deck.local 2`), and options written to `ConfigOverride.ini`: unlock all heroes/team-ups, free-for-all loot, free movement powers, preload data, allow other client versions, allow LAN players.
 * **Game Client** – client path and version, which Proton/Wine to use (or a custom command with `{exe}` and `{args}`), auto-login, 1280×800 resolution, skip intro movies, extra launch options.
 * **Settings** – install .NET, port status, import a newer server zip (your accounts are kept), Add to Steam, launcher behaviour.
+
+## Mods
+
+The Mods tab is a controller-friendly front end for **[MHO Extended Mod Manager](https://github.com/leeper48/MHO-UPK-Tools)** by leeper48 (MIT). The launcher shows and orders your mod list itself. Everything that touches game files is done by the real Mod Manager through its command line (`--install`, `--apply`, `--remove`), run with the same Proton/Wine as the game. That keeps its safety net intact: every game file is rebuilt from a verified original, turning a mod off puts the original back, and it refuses to write while the game runs.
+
+1. **Mods → Set up Mod Manager** (one time). This downloads the newest MHO Extended Mod Manager release from GitHub and checks it against its published SHA-256. It also downloads Microsoft's .NET 8 Desktop Runtime for Windows (about 55 MB) and unpacks it into the game's Proton prefix.
+2. Download mods from [Nexus Mods (Marvel Heroes Omega)](https://www.nexusmods.com/marvelheroesomega) into `~/Downloads`. The `.zip`, `.7z` and `.rar` mods in the MHModManager format all work.
+3. **Install mod…** lists your newest downloads first. A new mod is turned **on** and put at the top.
+4. **Apply changes**, or just press **PLAY**: pending mod changes are applied automatically before the game starts.
+
+* **Order matters:** when two mods change the same file, the one **higher** in the list wins. The details panel shows "Wins over …" / "Overridden by …".
+* **Remove** takes the mod out of the game first (if it's on), then moves its folder to `~/.local/share/MHLauncher/modmanager/removed/`.
+* **Full Mod Manager** opens the original window, with its editor, tags, Nexus update checks and Find My Mods. It uses the same library, so changes show up in the launcher too. It's a Windows desktop app, so use it with a mouse/trackpad.
+* **Update tool** installs the newest MHO Extended Mod Manager release.
 
 ## Where things are stored
 
@@ -85,7 +105,8 @@ The touchscreen and trackpads work too. Text fields open a controller-friendly k
 | Server, accounts database (`Data/Account.db`), `ConfigOverride.ini` | `~/.local/share/MHLauncher/MHServerEmu/` |
 | .NET runtime (if the launcher installed it) | `~/.local/share/MHLauncher/dotnet/` |
 | Proton/Wine prefix for the game | `~/.local/share/MHLauncher/prefix/` |
-| Logs (`server.log`, `client.log`, `launcher.log`) | `~/.local/share/MHLauncher/logs/` |
+| Logs (`server.log`, `client.log`, `launcher.log`, `modmanager.log`) | `~/.local/share/MHLauncher/logs/` |
+| Mod library (`mods/`, `state.json`), removed mods, Mod Manager app | `~/.local/share/MHLauncher/modmanager/` |
 | Launcher settings and saved logins (permissions 600) | `~/.config/MHLauncher/settings.json` |
 
 Back up `Account.db` before big server updates. To update the server, download a newer `MHServerEmu-…-linux-x64.zip`, turn the server off, and use **Settings → Import server .zip**.
@@ -100,6 +121,7 @@ Back up `Account.db` before big server updates. To update the server, download a
 * **The server stops right after starting**: open the Server tab log. The most common cause is game data missing from the client (`Calligraphy.sip`, `mu_cdata.sip`). Re-pick the client so they get copied again.
 * **Login fails in game**: check the account on the Accounts tab (Sign in checks the password against the server), and confirm that the "Login bridge" on the Server tab shows *Running*.
 * **Playing with friends on your network**: turn on **Allow LAN players** and restart the server. Friends launch the game with `-robocopy -nosteam -siteconfigurl=YOUR-IP/SiteConfig.xml` (no `http://`), and ports 80, 443 and 4306 must not be blocked by a firewall.
+* **A mod doesn't install or apply**: the Mod Manager's full output is in `~/.local/share/MHLauncher/logs/modmanager.log`. It refuses to change files while the game runs, and it leaves alone any game file that another tool changed (it lists those). If the Mods setup fails, start the game once (so Proton creates its prefix) and try again.
 * The server's web dashboard is at http://localhost:8080/Dashboard/ while the server is running. If another program (on Steam Deck usually Steam's own `steamwebhelper`) already uses 8080, the launcher moves the server to the next free port (8580, 8680, …) and says so in the server log.
 
 ## Notes
@@ -131,5 +153,6 @@ The script downloads a portable CPython build ([python-build-standalone](https:/
 
 * **MH Launcher** © Jazzneo, licensed under the [GNU GPL v3.0](LICENSE).
 * **[MHServerEmu](https://github.com/Crypto137/MHServerEmu)** by Crypto137 and contributors, licensed under the **AGPL-3.0**. Release packages include an unmodified MHServerEmu build together with its license (`server/LICENSE.txt`); its source code is available at the link above.
+* **[MHO Extended Mod Manager](https://github.com/leeper48/MHO-UPK-Tools)** by leeper48, licensed under the **MIT** license, building on Krisan's MHModManager format. It is not bundled: the Mods tab downloads the official release on request, and runs it unmodified.
 * Bundled runtime: [CPython](https://www.python.org/) (PSF License) via python-build-standalone, and [pygame-ce](https://github.com/pygame-community/pygame-ce) (LGPL-2.1).
 * Marvel Heroes is a trademark of its respective owners. No game files are included.

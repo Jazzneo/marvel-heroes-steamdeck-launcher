@@ -263,13 +263,12 @@ def build_args(settings, siteconfig_url, account=None):
     return args
 
 
-def launch(settings, runner, exe, args, log_path):
-    """Start the client. Returns the Popen object."""
+def build_command(settings, runner, exe, args, extra_env=None):
+    """Command + environment to run a Windows program in the launcher's Proton/Wine prefix."""
     env = dict(os.environ)
     for k in ("PYTHONHOME", "PYTHONPATH", "PYTHONNOUSERSITE", "SDL_VIDEODRIVER"):
         env.pop(k, None)
     os.makedirs(PREFIX_DIR, exist_ok=True)
-    workdir = os.path.dirname(exe)
     if runner is None:
         raise RuntimeError("No Proton or Wine found. Install Proton in Steam or pick a custom command.")
     if runner.kind in ("proton", "umu"):
@@ -281,26 +280,44 @@ def launch(settings, runner, exe, args, log_path):
         env.setdefault("SteamGameId", "0")
         if runner.kind == "umu":
             env["PROTONPATH"] = runner.path
-            env["WINEPREFIX"] = os.path.join(PREFIX_DIR, "pfx")
+            env["WINEPREFIX"] = wine_prefix()
             env.setdefault("GAMEID", "umu-0")
             cmd = ["umu-run", exe] + args
         else:
             cmd = [os.path.join(runner.path, "proton"), "run", exe] + args
     elif runner.kind == "wine":
-        env["WINEPREFIX"] = os.path.join(PREFIX_DIR, "pfx")
+        env["WINEPREFIX"] = wine_prefix()
         env.setdefault("WINEDEBUG", "-all")
         cmd = [runner.path, exe] + args
     else:
         template = settings.get("custom_runner_cmd") or ""
         if "{exe}" not in template:
             raise RuntimeError("Custom command must contain {exe} (and optionally {args}).")
-        parts = []
+        cmd = []
         for tok in shlex.split(template):
             if tok == "{args}":
-                parts += args
+                cmd += args
             else:
-                parts.append(tok.replace("{exe}", exe))
-        cmd = parts
+                cmd.append(tok.replace("{exe}", exe))
+    if extra_env:
+        env.update(extra_env)
+    return cmd, env
+
+
+def wine_prefix():
+    """The Wine prefix the game and the mod manager share (Proton keeps it in <compat data>/pfx)."""
+    return os.path.join(PREFIX_DIR, "pfx")
+
+
+def to_windows_path(path):
+    """A Linux path as Wine sees it (drive Z: is the whole Linux file system)."""
+    return "Z:" + os.path.abspath(path).replace("/", "\\")
+
+
+def launch(settings, runner, exe, args, log_path):
+    """Start the client. Returns the Popen object."""
+    cmd, env = build_command(settings, runner, exe, args)
+    workdir = os.path.dirname(exe)
     log = open(log_path, "w", encoding="utf-8", errors="replace")
     log.write("$ " + " ".join(shlex.quote(c if "-password=" not in c else "-password=***") for c in cmd) + "\n\n")
     log.flush()

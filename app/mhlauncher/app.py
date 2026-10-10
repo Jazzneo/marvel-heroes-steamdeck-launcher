@@ -93,11 +93,12 @@ class Dialog(Modal):
 class Progress(Modal):
     hints = []
 
-    def __init__(self, app, title, show_log=False, cancel=None):
+    def __init__(self, app, title, show_log=False, cancel=None, log_fn=None):
         self.height = 470 if show_log else 260
         super().__init__(app)
         self.title, self.show_log, self.cancel = title, show_log, cancel
         self.status, self.fraction = "Working…", None
+        self.log_fn = log_fn          # where the log box reads from (default: the server log)
 
     def build(self):
         if self.cancel:
@@ -127,7 +128,7 @@ class Progress(Modal):
             box = pygame.Rect(self.rect.x + 36, self.rect.y + 156, self.rect.w - 72,
                               self.rect.h - 156 - (100 if self.cancel else 36))
             rrect(surf, C["bg"], box, 10)
-            lines = self.app.server.log[-9:]
+            lines = (self.log_fn() if self.log_fn else self.app.server.log)[-9:]
             y = box.y + 10
             for ln in lines:
                 text(surf, ln, (box.x + 12, y), 14, C["dim"], max_w=box.w - 24)
@@ -384,8 +385,9 @@ class App:
         self.quitting = False
 
         from . import screens
-        self.screens = [screens.PlayScreen(self), screens.AccountsScreen(self), screens.ServerScreen(self),
-                        screens.ClientScreen(self), screens.SettingsScreen(self)]
+        from .modscreen import ModsScreen
+        self.screens = [screens.PlayScreen(self), screens.AccountsScreen(self), ModsScreen(self),
+                        screens.ServerScreen(self), screens.ClientScreen(self), screens.SettingsScreen(self)]
         self.screen_i = 0
         # first run: install the server that ships with the launcher
         try:
@@ -446,12 +448,13 @@ class App:
     def browse(self, title, start, exts, on_pick, pick_dirs=False):
         self.open_modal(FileBrowser(self, title, start, exts, on_pick, pick_dirs))
 
-    def run_task(self, title, fn, on_done=None, show_log=False, cancellable=False, quiet=False):
+    def run_task(self, title, fn, on_done=None, show_log=False, cancellable=False, quiet=False, log_fn=None):
         """Run fn(progress) in a thread with a progress modal; on_done(result) on the main thread."""
         cancel_ev = threading.Event()
         modal = None
         if not quiet:
-            modal = Progress(self, title, show_log, cancel=(lambda: cancel_ev.set()) if cancellable else None)
+            modal = Progress(self, title, show_log, cancel=(lambda: cancel_ev.set()) if cancellable else None,
+                             log_fn=log_fn)
             self.open_modal(modal)
 
         def progress(frac, status=None):
@@ -472,10 +475,10 @@ class App:
                 if modal:
                     self.close_modal(modal)
                 if isinstance(err, PortConflict) and err.mh_pids:
-                    retry = lambda: self.run_task(title, fn, on_done, show_log, cancellable, quiet)
+                    retry = lambda: self.run_task(title, fn, on_done, show_log, cancellable, quiet, log_fn)
                     self.offer_stop_leftover(err.mh_pids, then=retry, reason=str(err))
                 elif isinstance(err, BridgeBlocked):
-                    retry = lambda: self.run_task(title, fn, on_done, show_log, cancellable, quiet)
+                    retry = lambda: self.run_task(title, fn, on_done, show_log, cancellable, quiet, log_fn)
                     self.offer_port_fix(str(err), err.servers, then=retry)
                 elif isinstance(err, PortConflict):
                     self.dialog("Port already in use", str(err) + "\n\nClose that program (or reboot) and try again.")
@@ -909,7 +912,8 @@ class App:
         if self.modals:
             hints = list(self.modals[-1].hints)
         else:
-            hints = [("A", "Select"), ("B", "Back")]
+            a_label = getattr(self.screen, "accept_hints", {}).get(getattr(focused, "key", None), "Select")
+            hints = [("A", a_label), ("B", "Back")]
             if isinstance(focused, (ui.Toggle, ui.Selector)):
                 hints.append(("DPAD", "Change"))
             if isinstance(focused, ui.ListView) and focused.on_alt:

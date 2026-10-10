@@ -4,7 +4,7 @@ import os
 import threading
 
 APP_NAME = "MHLauncher"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 # Folder that contains MHLauncher.sh (two levels above this file: app/mhlauncher/config.py)
 BUNDLE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -39,6 +39,7 @@ DEFAULTS = {
     "lan_mode": False,          # let other PCs on the network join
     "server_options": {},       # ConfigOverride.ini values {"Section.Key": "value"}
     "fullscreen": None,         # None = auto (fullscreen in Gaming Mode)
+    "mods_dirty": False,        # mod list changed since the last Apply
 }
 
 

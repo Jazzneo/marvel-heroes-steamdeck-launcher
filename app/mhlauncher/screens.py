@@ -162,6 +162,13 @@ class PlayScreen(Screen):
                 from .app import BridgeBlocked
                 raise BridgeBlocked("The game would not be able to log in:\n\n• " + "\n• ".join(problems),
                                     integration.find_blocking_web_servers())
+            from . import mods as modlib
+            if self.s.get("mods_dirty") and modlib.is_ready():
+                ms = next(sc for sc in app.screens if sc.name == "mods")
+                ok_m, summary = ms.apply_blocking(progress)
+                if not ok_m:
+                    raise RuntimeError("Your mod changes couldn't be applied, so the game wasn't started:\n\n" +
+                                       summary + "\n\nCheck the Mods tab (or turn the new mod off) and try again.")
             if acc and self.s.get("auto_login"):
                 progress(None, "Checking your login…")
                 ok, msg = accounts.verify_login(app.server, acc["email"], acc.get("password", ""))
