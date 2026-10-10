@@ -27,6 +27,7 @@ FALLBACK_VERSION = "0.37.221"            # newest release when this launcher was
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page=15"
 DOWNLOAD_BASE = f"https://github.com/{REPO}/releases/download"
 WIN_DESKTOP_RUNTIME = "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.zip"
+WIN_BASE_RUNTIME = "https://aka.ms/dotnet/8.0/dotnet-runtime-win-x64.zip"   # dotnet.exe + Microsoft.NETCore.App
 WIN_DESKTOP_RUNTIME_EXE = "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
 
 ROOT = os.path.join(DATA_DIR, "modmanager")
@@ -190,38 +191,68 @@ def ensure_prefix(settings, runner, progress=None):
         raise RuntimeError("Could not create the Proton/Wine prefix. Start the game once, then try again.")
 
 
+def mlog(msg):
+    """A line in logs/modmanager.log (setup steps are logged too, not only the tool's output)."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with open(os.path.join(LOG_DIR, "modmanager.log"), "a", encoding="utf-8") as f:
+        f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+
+
+def runtime_report():
+    d = win_dotnet_dir()
+    parts = [f"dotnet.exe: {'yes' if os.path.isfile(os.path.join(d, 'dotnet.exe')) else 'no'}"]
+    for fw in ("Microsoft.NETCore.App", "Microsoft.WindowsDesktop.App"):
+        p = os.path.join(d, "shared", fw)
+        parts.append(f"{fw}: {', '.join(sorted(os.listdir(p))) if os.path.isdir(p) else 'missing'}")
+    return "; ".join(parts)
+
+
+def _unzip_into(zpath, dest):
+    with zipfile.ZipFile(zpath) as z:
+        for info in z.infolist():
+            out = os.path.realpath(os.path.join(dest, info.filename))
+            if out.startswith(os.path.realpath(dest) + os.sep):
+                z.extract(info, dest)
+
+
 def install_runtime(settings=None, runner=None, progress=None):
-    """Windows .NET 8 Desktop Runtime in the prefix: the zip unpacked (fast, no installer); if that download is
-    unavailable, Microsoft's installer run silently inside the prefix."""
+    """Windows .NET 8 runtimes in the prefix's C:\\Program Files\\dotnet.
+
+    The Windows Desktop runtime package holds only Microsoft.WindowsDesktop.App; dotnet.exe and the base
+    Microsoft.NETCore.App come in the separate .NET Runtime package, so both are unpacked into the same folder.
+    If the zips can't be used, Microsoft's Windows Desktop installer (which brings both) runs silently in the prefix."""
     os.makedirs(ROOT, exist_ok=True)
+    dest = win_dotnet_dir()
+    os.makedirs(dest, exist_ok=True)
+    mlog(f"runtime: installing into {dest}; before: {runtime_report()}")
     tmp = tempfile.mkdtemp(dir=ROOT)
     try:
-        zpath = os.path.join(tmp, "runtime.zip")
         try:
-            _download(WIN_DESKTOP_RUNTIME, zpath, progress, ".NET 8 Desktop Runtime for Windows", (0.3, 0.9))
-            if progress:
-                progress(0.92, "Unpacking .NET runtime into the prefix…")
-            dest = win_dotnet_dir()
-            os.makedirs(dest, exist_ok=True)
-            with zipfile.ZipFile(zpath) as z:
-                for info in z.infolist():
-                    out = os.path.realpath(os.path.join(dest, info.filename))
-                    if out.startswith(os.path.realpath(dest) + os.sep):
-                        z.extract(info, dest)
+            for url, label, share in ((WIN_BASE_RUNTIME, ".NET 8 Runtime for Windows", (0.3, 0.55)),
+                                      (WIN_DESKTOP_RUNTIME, ".NET 8 Desktop Runtime for Windows", (0.55, 0.85))):
+                zpath = os.path.join(tmp, os.path.basename(url))
+                _download(url, zpath, progress, label, share)
+                mlog(f"runtime: downloaded {url} ({os.path.getsize(zpath) // 1048576} MB)")
+                if progress:
+                    progress(share[1], f"Unpacking {label}…")
+                _unzip_into(zpath, dest)
+                os.remove(zpath)
+            mlog(f"runtime: after zips: {runtime_report()}")
         except (urllib.error.URLError, zipfile.BadZipFile, OSError) as e:
-            if settings is None:
-                raise
-            print("[mods] runtime zip failed, trying installer:", e)
+            mlog(f"runtime: zip route failed: {e!r}")
+        if not runtime_ok() and settings is not None:
             epath = os.path.join(tmp, "windowsdesktop-runtime-win-x64.exe")
             _download(WIN_DESKTOP_RUNTIME_EXE, epath, progress, ".NET 8 Desktop Runtime installer", (0.3, 0.8))
             if progress:
-                progress(None, "Installing .NET runtime into the prefix…")
-            _run_in_prefix(settings, runner, epath, ["/install", "/quiet", "/norestart"], timeout=900)
+                progress(None, "Installing .NET runtime into the prefix (can take a few minutes)…")
+            code, out = _run_in_prefix(settings, runner, epath, ["/install", "/quiet", "/norestart"], timeout=1200)
+            mlog(f"runtime: installer exit {code}\n{out[-3000:]}")
+            mlog(f"runtime: after installer: {runtime_report()}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if not runtime_ok():
-        raise RuntimeError("The Windows .NET 8 Desktop Runtime could not be installed into the prefix. "
-                           f"See {os.path.join(LOG_DIR, 'modmanager.log')}.")
+        raise RuntimeError("The Windows .NET 8 runtime could not be set up in the game's Proton prefix.\n\n"
+                           f"Found: {runtime_report()}\n\nDetails: {os.path.join(LOG_DIR, 'modmanager.log')}")
 
 
 def init_library(game_root):
