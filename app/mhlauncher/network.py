@@ -121,6 +121,12 @@ def _refresh_bg():
         _refreshing.clear()
 
 
+def mark_firewall_open(is_open):
+    """Update the cached firewall state right after the launcher changed it."""
+    with _snap_lock:
+        _snap["fw_open"] = is_open
+
+
 def snapshot(max_age=15.0):
     """Cached network facts; never blocks on outside programs. Refreshes in the background when stale."""
     with _snap_lock:
@@ -284,7 +290,7 @@ def firewall_ports_open(ports=FRIEND_PORTS, fw=None):
     if kind == "firewalld":
         try:
             for p in ports:
-                r = subprocess.run(["firewall-cmd", "--query-port", f"{p}/tcp"], capture_output=True,
+                r = subprocess.run(["firewall-cmd", f"--query-port={p}/tcp"], capture_output=True,
                                    text=True, timeout=5)
                 if r.returncode not in (0, 1):
                     return None
@@ -297,19 +303,49 @@ def firewall_ports_open(ports=FRIEND_PORTS, fw=None):
 
 
 def firewall_script(ports=FRIEND_PORTS, fw=None):
-    """Shell lines (run as root) that let friends through the firewall, or [] if none is active."""
+    """Shell lines (run as root) that let friends through the firewall, or [] if none is active.
+
+    Each rule is only added when it isn't there yet, and every rule this adds is printed as 'ADDED:<what>',
+    so closing later removes exactly those (rules you had before stay)."""
     kind, active = fw or firewall()
     if not active:
         return []
     if kind == "firewalld":
-        lines = [f"firewall-cmd --permanent --add-port={p}/tcp" for p in ports]
+        lines = [f"firewall-cmd --permanent --query-port={p}/tcp >/dev/null 2>&1 || "
+                 f"{{ firewall-cmd --permanent --add-port={p}/tcp >/dev/null && echo ADDED:{p}; }}" for p in ports]
         # Tailscale's interface: trusted, like Tailscale recommends
-        lines.append("ip link show tailscale0 >/dev/null 2>&1 && firewall-cmd --permanent --zone=trusted "
-                     "--add-interface=tailscale0")
-        lines.append("firewall-cmd --reload")
+        lines.append("if ip link show tailscale0 >/dev/null 2>&1 || [ -d /sys/class/net/tailscale0 ]; then "
+                     "firewall-cmd --permanent --zone=trusted --query-interface=tailscale0 >/dev/null 2>&1 || "
+                     "{ firewall-cmd --permanent --zone=trusted --add-interface=tailscale0 >/dev/null && "
+                     "echo ADDED:tailscale0; }; fi")
+        lines.append("firewall-cmd --reload >/dev/null")
         return lines
     if kind == "ufw":
-        return [f"ufw allow {p}/tcp comment 'MH Launcher'" for p in ports]
+        return [f"ufw status | grep -qE '^{p}/tcp +ALLOW' || {{ ufw allow {p}/tcp comment 'MH Launcher' "
+                f">/dev/null && echo ADDED:{p}; }}" for p in ports]
+    return []
+
+
+def parse_added(output):
+    """What an open script added: (ports, tailscale_trusted)."""
+    added = re.findall(r"ADDED:(\S+)", output or "")
+    ports = sorted({int(a) for a in added if a.isdigit()})
+    return ports, "tailscale0" in added
+
+
+def firewall_close_script(ports, tailscale_trusted=False, fw=None):
+    """Shell lines (run as root) that remove the rules the launcher added. [] if nothing to do."""
+    kind, active = fw or firewall()
+    if not active or not (ports or tailscale_trusted):
+        return []
+    if kind == "firewalld":
+        lines = [f"firewall-cmd --permanent --remove-port={p}/tcp >/dev/null 2>&1" for p in ports]
+        if tailscale_trusted:
+            lines.append("firewall-cmd --permanent --zone=trusted --remove-interface=tailscale0 >/dev/null 2>&1")
+        lines.append("firewall-cmd --reload >/dev/null")
+        return lines
+    if kind == "ufw":
+        return [f"ufw delete allow {p}/tcp >/dev/null 2>&1" for p in ports]
     return []
 
 

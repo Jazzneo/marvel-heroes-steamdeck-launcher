@@ -646,6 +646,19 @@ class App:
     def request_quit(self):
         if self.quitting:
             return
+        if (self.settings.get("fw_added_ports") or self.settings.get("fw_added_tailscale")) and not self.modals:
+            fs = next(sc for sc in self.screens if sc.name == "friends")
+            self.dialog("Firewall still open for friends",
+                        "The launcher opened your firewall for friends and it's still open. Close it before you go?",
+                        [("Cancel", None, "ghost"), ("Keep open & quit", self._quit_checked, "secondary"),
+                         ("Close & quit", lambda: fs.close_firewall(then=self._quit_checked), "primary")],
+                        width=1000)
+            return
+        self._quit_checked()
+
+    def _quit_checked(self):
+        if self.quitting:
+            return
         if self.server.running and self.settings.get("stop_server_on_exit"):
             msg = "The server will be shut down safely (player data is saved)."
             if self.game_running:

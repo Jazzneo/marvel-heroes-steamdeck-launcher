@@ -111,7 +111,7 @@ def run_as_admin(script, timeout=180):
     except Exception as e:
         return False, str(e)
     if r.returncode == 0:
-        return True, "Done."
+        return True, (r.stdout or "").strip() or "Done."
     if r.returncode in (126, 127):
         return False, "The password prompt was cancelled or no password dialog is available here."
     return False, (r.stderr or r.stdout or f"exit code {r.returncode}").strip()[-300:]

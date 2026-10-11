@@ -98,6 +98,7 @@ class FriendsScreen(Screen):
                 threading.Thread(target=lambda: (network.close_router_ports(), self.s.set("upnp_open", False)),
                                  daemon=True).start()
             self._after_host_change()
+            self.offer_close_firewall()
 
     def _after_host_change(self):
         """Hosting changes how the server listens: restart it if it's running."""
@@ -145,7 +146,13 @@ class FriendsScreen(Screen):
             def done(res):
                 ok, info = res
                 if ok:
+                    ports, ts = network.parse_added(info)
+                    if ports or ts:
+                        self.s.set("fw_added_ports", sorted(set(self.s.get("fw_added_ports") or []) | set(ports)),
+                                   save=False)
+                        self.s.set("fw_added_tailscale", bool(self.s.get("fw_added_tailscale") or ts))
                     self.fw_state = True
+                    network.mark_firewall_open(True)
                     threading.Thread(target=network.refresh_snapshot, daemon=True).start()
                     app.toast("Friends can reach your server now", "ok")
                 else:
@@ -156,6 +163,56 @@ class FriendsScreen(Screen):
         app.dialog("Let friends in", "To host, the launcher needs to " + " and ".join(what) +
                    ". You'll be asked for your password once.",
                    [("Not now", None, "ghost"), ("Open it", go, "primary")], width=900)
+
+    def firewall_opened_by_us(self):
+        return bool(self.s.get("fw_added_ports") or self.s.get("fw_added_tailscale"))
+
+    def close_firewall(self, then=None):
+        """Remove exactly the firewall rules the launcher added for friends (one password prompt)."""
+        app = self.app
+        ports = list(self.s.get("fw_added_ports") or [])
+        ts = bool(self.s.get("fw_added_tailscale"))
+        snap = network.snapshot()
+        lines = network.firewall_close_script(ports, ts, fw=snap["fw"])
+        if not lines:
+            self.s.set("fw_added_ports", [], save=False)
+            self.s.set("fw_added_tailscale", False)
+            app.toast("Nothing to close: the launcher didn't open any firewall ports.", "info")
+            if then:
+                then()
+            return
+
+        def work(p):
+            p(None, "Waiting for your password…")
+            return integration.run_as_admin("set +e\n" + "\n".join(lines) + "\nexit 0")
+
+        def done(res):
+            ok, info = res
+            if ok:
+                self.s.set("fw_added_ports", [], save=False)
+                self.s.set("fw_added_tailscale", False)
+                self.fw_state = False
+                network.mark_firewall_open(False)
+                threading.Thread(target=network.refresh_snapshot, daemon=True).start()
+                app.toast("Firewall closed again. Your own games keep working.", "ok", 6)
+            else:
+                app.dialog("Couldn't close it automatically", f"{info}\n\nOpen Konsole and run:\n\n" +
+                           "\n".join("sudo " + l.replace(" >/dev/null 2>&1", "").replace(" >/dev/null", "")
+                                      for l in lines), width=1000)
+            if then:
+                then()
+        app.run_task("Closing the firewall", work, done)
+
+    def offer_close_firewall(self):
+        if not self.firewall_opened_by_us():
+            return
+        what = ", ".join(map(str, self.s.get("fw_added_ports") or []))
+        self.app.dialog("Close the firewall again?",
+                        f"While hosting, the launcher opened your firewall for friends"
+                        f"{' (ports ' + what + ')' if what else ''}"
+                        f"{' and trusted Tailscale' if self.s.get('fw_added_tailscale') else ''}. "
+                        "Close it now that you're done? Playing on your own keeps working either way.",
+                        [("Keep open", None, "ghost"), ("Close it", self.close_firewall, "primary")], width=920)
 
     def open_router(self):
         app = self.app
@@ -316,8 +373,12 @@ class FriendsScreen(Screen):
             ws.append(ui.Button("fr_copy", (LX + COL - 20 - 120, Y0 + 292, 120, 50), "Copy", self.copy_invite,
                                 "secondary", size=18, enabled=bool(self.invite())))
         bw = (w - 12) // 2
-        ws.append(ui.Button("fr_open", (LX + 20, CONTENT.bottom - 66, bw, 50), "Open firewall",
-                            lambda: self.open_access(False), "ghost", size=17))
+        if self.firewall_opened_by_us():
+            ws.append(ui.Button("fr_open", (LX + 20, CONTENT.bottom - 66, bw, 50), "Close firewall",
+                                self.close_firewall, "danger", size=17))
+        else:
+            ws.append(ui.Button("fr_open", (LX + 20, CONTENT.bottom - 66, bw, 50), "Open firewall",
+                                lambda: self.open_access(False), "ghost", size=17))
         ws.append(ui.Button("fr_router", (LX + 20 + bw + 12, CONTENT.bottom - 66, bw, 50), "Open router (UPnP)",
                             self.open_router, "ghost", size=17))
         ws.append(ui.Toggle("fr_reg", (LX + 20, CONTENT.bottom - 126, w, 52), "Friends can create accounts",
@@ -375,7 +436,9 @@ class FriendsScreen(Screen):
             fw = self.fw_state if self.fw_state is not None else snap["fw_open"]
             kind, active = snap["fw"]
             rows.append((True if (not active or fw) else (None if fw is None else False), "Firewall",
-                         "No firewall active" if not active else ("Open for friends" if fw else
+                         "No firewall active" if not active else (
+                             "Open for friends – close it when you're done" if (fw and self.firewall_opened_by_us())
+                             else "Open for friends" if fw else
                                                                     "Press 'Open firewall'" if fw is False else
                                                                     "Can't check – press 'Open firewall' once")))
             if self.s.get("host_kind") == "internet":

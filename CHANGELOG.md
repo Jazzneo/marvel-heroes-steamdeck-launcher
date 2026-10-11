@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.3
+- **Close the firewall after playing with friends.** When you turn off *Host for friends*, the launcher offers to close the firewall again (one password prompt). The Friends tab button switches to **Close firewall** while it's open, and quitting with the firewall still open asks *Close & quit* / *Keep open & quit*.
+- Only the rules the launcher added are removed: opening now records exactly which ports (and the Tailscale trust) it added, so firewall rules you had before stay untouched.
+
 ## v1.2.2
 - **Set up Tailscale** button on the Friends tab: turns on the Tailscale service (one password prompt), lets you control it without sudo, opens the login page, and shows your Tailscale address as soon as you're logged in.
 - **Fix: symbols showed as empty boxes** (◀ ▶ ✓ → ⌫ …) on systems whose main font doesn't have them (e.g. Noto Sans on Bazzite). Missing symbols are now drawn with a bundled DejaVu Sans, and the selector arrows are drawn as shapes.
