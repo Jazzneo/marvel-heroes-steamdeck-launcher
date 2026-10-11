@@ -553,3 +553,173 @@ def downloads_archives(limit=40):
                 out.append(p)
     out.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return out[:limit]
+
+
+# ============================================================== sharing mods with friends
+# Mods change the game client's own files (packages, icons, text, sounds); the server doesn't know about them.
+# So in multiplayer each player only sees the mods installed in their own game. To see the same as the host, a
+# friend copies the host's enabled mods: the host's launcher serves them (only while hosting, and only if the
+# host allows it), the friend's launcher puts them in its library, turns them on and applies them.
+SHARE_LIMIT = 4 * 1024 ** 3          # above this, warn that copying takes a while
+
+
+def size_text(n):
+    if n >= 1024 ** 3:
+        return f"{n / 1024 ** 3:.1f} GB"
+    if n >= 1024 ** 2:
+        return f"{n / 1024 ** 2:.0f} MB"
+    return "less than 1 MB" if n else "nothing"
+
+
+def fingerprint(folder):
+    """Identifies a mod's exact contents: file names, sizes and the manifest (fast, no full hashing)."""
+    h = hashlib.sha1()
+    total = 0
+    for dirpath, dirs, files in os.walk(folder):
+        dirs.sort()
+        for name in sorted(files):
+            p = os.path.join(dirpath, name)
+            try:
+                size = os.path.getsize(p)
+            except OSError:
+                continue
+            total += size
+            h.update(f"{os.path.relpath(p, folder)}\0{size}\n".encode("utf-8", "replace"))
+    try:
+        with open(os.path.join(folder, "manifest.json"), "rb") as f:
+            h.update(f.read())
+    except OSError:
+        pass
+    return h.hexdigest()[:20], total
+
+
+def shared_list(lib=None):
+    """The host's enabled mods, highest priority first: [{id, name, version, fp, size}]."""
+    lib = lib or Library()
+    out = []
+    for m in lib.mods:
+        if m.enabled and not m.error:
+            fp, size = fingerprint(m.folder)
+            out.append({"id": m.id, "name": m.name, "version": m.version, "fp": fp, "size": size})
+    return out
+
+
+def zip_mod(folder):
+    """Pack one mod folder into a temporary zip (stored, UPKs are already compressed)."""
+    fd, path = tempfile.mkstemp(prefix="mhl-mod-", suffix=".zip")
+    os.close(fd)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+        for dirpath, _dirs, files in os.walk(folder):
+            for name in files:
+                p = os.path.join(dirpath, name)
+                z.write(p, os.path.relpath(p, folder))
+    return path
+
+
+def make_host_api(settings, is_hosting):
+    """Handler for POST /mhl/mods/<action> on the host's login bridge."""
+    def api(action, data):
+        if not settings.get("share_mods"):
+            return 403, {"error": "Your friend turned off sharing their mods (Settings → Share my mods with friends)."}
+        if not is_hosting():
+            return 403, {"error": "Your friend isn't hosting right now."}
+        if not os.path.isfile(os.path.join(LIBRARY, "state.json")):
+            return 200, {"mods": []}
+        lib = Library()
+        if action == "list":
+            return 200, {"mods": shared_list(lib)}
+        if action == "get":
+            m = lib.find(str(data.get("id") or ""))
+            if not m or not m.enabled:
+                return 404, {"error": "That mod isn't turned on on your friend's side any more."}
+            return 200, {"__file__": zip_mod(m.folder), "__delete__": True}
+        return 404, {"error": "Unknown action"}
+    return api
+
+
+def compare_with(host_mods, lib=None):
+    """What the friend needs: ([mods to download], [mods present but turned off], total download bytes)."""
+    lib = lib or Library()
+    need, enable = [], []
+    for hm in host_mods:
+        local = lib.find(hm["id"])
+        if local is None or local.error or fingerprint(local.folder)[0] != hm["fp"]:
+            need.append(hm)
+        elif not local.enabled:
+            enable.append(hm)
+    return need, enable, sum(h["size"] for h in need)
+
+
+def _safe_extract(zpath, dest):
+    with zipfile.ZipFile(zpath) as z:
+        root = os.path.realpath(dest)
+        for info in z.infolist():
+            target = os.path.realpath(os.path.join(dest, info.filename))
+            if target != root and not target.startswith(root + os.sep):
+                raise ValueError(f"unsafe path in mod archive: {info.filename}")
+        z.extractall(dest)
+
+
+def install_shared(zpath, mod_id):
+    """Put a mod copied from the host into the library (an older copy is moved to REMOVED, not deleted)."""
+    if not re.fullmatch(r"[^/\\\0]+", mod_id) or mod_id in (".", ".."):
+        raise ValueError(f"bad mod name {mod_id!r}")
+    mods_dir = os.path.join(LIBRARY, "mods")
+    os.makedirs(mods_dir, exist_ok=True)
+    tmp = os.path.join(mods_dir, mod_id + ".tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    try:
+        _safe_extract(zpath, tmp)
+        if not os.path.isfile(os.path.join(tmp, "manifest.json")):
+            raise ValueError("the mod has no manifest.json")
+        final = os.path.join(mods_dir, mod_id)
+        if os.path.isdir(final):
+            os.makedirs(REMOVED, exist_ok=True)
+            shutil.move(final, os.path.join(REMOVED, f"{mod_id}-{time.strftime('%Y%m%d-%H%M%S')}"))
+        os.rename(tmp, final)
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def match_order(host_mods):
+    """Turn the host's mods on and give them the host's priority, above the friend's own mods (so the game
+    looks like the host's). The friend's other mods stay as they are."""
+    lib = Library()
+    ids = [h["id"].lower() for h in host_mods]
+    picked = [m for i in ids for m in lib.mods if m.id.lower() == i]
+    for m in picked:
+        m.enabled = True
+    rest = [m for m in lib.mods if m not in picked]
+    top = [m for m in rest if m.lock == "top"]
+    lib.mods = top + [m for m in picked] + [m for m in rest if m.lock != "top"]
+    lib.save()
+    return len(picked)
+
+
+def get_from_friend(host, host_mods, progress=None):
+    """Download the mods the friend is missing, then turn them all on in the host's order. Returns names."""
+    from . import savetransfer
+    need, _enable, total = compare_with(host_mods)
+    done_bytes = 0
+    for i, hm in enumerate(need, 1):
+        label = f"Copying {hm['name']} from your friend ({i}/{len(need)})…"
+        if progress:
+            progress(done_bytes / total if total else None, label)
+        fd, zpath = tempfile.mkstemp(prefix="mhl-friendmod-", suffix=".zip")
+        os.close(fd)
+        try:
+            savetransfer.remote(host, "get", {"id": hm["id"]}, timeout=600, base="/mhl/mods/", stream_to=zpath,
+                                progress=(lambda f, hm=hm, base=done_bytes: progress(
+                                    (base + f * hm["size"]) / total if total else None, label)) if progress else None)
+            install_shared(zpath, hm["id"])
+        finally:
+            try:
+                os.remove(zpath)
+            except OSError:
+                pass
+        done_bytes += hm["size"]
+        mlog(f"copied mod {hm['id']} from {host}")
+    match_order(host_mods)
+    return [h["name"] for h in need]

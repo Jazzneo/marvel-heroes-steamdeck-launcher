@@ -288,7 +288,7 @@ def make_host_api(get_db_file, bridge, backup_dir):
 
 
 # ------------------------------------------------------------------ friend side (talks to the host's bridge)
-def remote(host, action, data, timeout=120):
+def remote(host, action, data, timeout=120, base="/mhl/save/", stream_to=None, progress=None):
     """POST to a friend's launcher. Uses the login bridge's HTTPS port (self-signed, so not verified: the
     password is still encrypted on the way). Returns the JSON reply or raises SaveError."""
     import json
@@ -299,18 +299,56 @@ def remote(host, action, data, timeout=120):
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx))
-    req = urllib.request.Request(f"https://{host.strip()}/mhl/save/{action}", data=json.dumps(data).encode(),
+    req = urllib.request.Request(f"https://{host.strip()}{base}{action}", data=json.dumps(data).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
         with opener.open(req, timeout=timeout) as r:
-            return json.loads(r.read() or b"{}")
+            if stream_to is None:
+                return json.loads(r.read() or b"{}")
+            total, done = int(r.headers.get("Content-Length") or 0), 0
+            with open(stream_to, "wb") as out:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    done += len(chunk)
+                    if progress and total:
+                        progress(done / total)
+            return {"size": done}
     except urllib.error.HTTPError as e:
         try:
             msg = json.loads(e.read() or b"{}").get("error")
         except ValueError:
             msg = None
         if e.code == 404 and not msg:
-            msg = "Your friend's launcher is too old for moving heroes. They need MH Launcher 1.4.0 or newer."
+            msg = ("Your friend's launcher is too old for this. They need MH Launcher " +
+                   ("1.5.0" if "mods" in base else "1.4.0") + " or newer.")
         raise SaveError(msg or f"Your friend's launcher answered with error {e.code}.")
     except (urllib.error.URLError, OSError) as e:
         raise SaveError(f"Can't reach your friend's launcher ({getattr(e, 'reason', e)}). Is their server on?")
+
+
+# ------------------------------------------------------------------ cash shop points (Gs)
+def g_accounts(conn):
+    """[{id, email, name, balance}] for every account on this server. balance: None = never logged in,
+    -1 = still the starting amount for new accounts (given at the next login)."""
+    out = []
+    for r in conn.execute("SELECT a.Id, a.Email, a.PlayerName, p.GazillioniteBalance AS g, p.DbGuid AS pid "
+                          "FROM Account a LEFT JOIN Player p ON p.DbGuid = a.Id ORDER BY a.PlayerName COLLATE NOCASE"):
+        out.append({"id": r["Id"], "email": r["Email"], "name": r["PlayerName"],
+                    "balance": None if r["pid"] is None else (r["g"] if r["g"] is not None else -1)})
+    return out
+
+
+def add_g(conn, account_id, amount, starting_balance):
+    """Add (or with a negative amount, remove) Gs. The server reads the balance from here at every login.
+    Returns the new balance."""
+    row = conn.execute("SELECT GazillioniteBalance FROM Player WHERE DbGuid = ?", (account_id,)).fetchone()
+    if row is None:
+        raise SaveError("This account has never logged in, so it has no wallet yet. Log in with it once, quit, "
+                        "and try again.")
+    cur = row[0] if row[0] is not None and row[0] >= 0 else starting_balance
+    new = max(0, min(int(cur) + int(amount), 2_000_000_000))
+    conn.execute("UPDATE Player SET GazillioniteBalance = ? WHERE DbGuid = ?", (new, account_id))
+    return new

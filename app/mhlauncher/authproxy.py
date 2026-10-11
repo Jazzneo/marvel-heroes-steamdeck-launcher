@@ -248,6 +248,8 @@ class _Handler(BaseHTTPRequestHandler):
         local = is_local_client(ip) or ip in bridge.local_ips
         if low.startswith("/mhl/save/"):
             return self._save_api(low[len("/mhl/save/"):], local)
+        if low.startswith("/mhl/mods/"):
+            return self._save_api(low[len("/mhl/mods/"):], local, api_name="mods_api")
         if not local:
             allowed = any(self.command == m and (low == p or (p.endswith("/") and low.startswith(p)))
                           for m, p in FRIEND_PATHS)
@@ -294,14 +296,36 @@ class _Handler(BaseHTTPRequestHandler):
             bridge._log(f"forward failed: {e}")
             self._send(502, b"MHServerEmu is not running")
 
-    def _save_api(self, action, local):
-        """Hero transfer between launchers (see savetransfer.py). JSON in, JSON out; needs the account's password."""
+    def _save_api(self, action, local, api_name="save_api"):
+        """Launcher-to-launcher calls: hero transfer (savetransfer.py, needs the account's password) and mod
+        sharing (mods.py). JSON in; JSON out, or a file when the API answers {"__file__": path}."""
         bridge = self.server.bridge
         ip = self.client_address[0]
+        api = getattr(bridge, api_name, None)
 
         def reply(code, obj):
-            self._send(code, json.dumps(obj).encode(), "application/json")
-        if self.command != "POST" or bridge.save_api is None:
+            path = obj.get("__file__") if isinstance(obj, dict) else None
+            if not path:
+                return self._send(code, json.dumps(obj).encode(), "application/json")
+            try:
+                size = os.path.getsize(path)
+                self.send_response(code)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = f.read(1 << 20)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            finally:
+                if obj.get("__delete__"):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+        if self.command != "POST" or api is None:
             return reply(404, {"error": "Not available"})
         if not local and not bridge.hosting:
             return reply(403, {"error": "Your friend isn't hosting right now."})
@@ -318,7 +342,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not local:
             bridge.friends_seen[ip] = time.time()
         try:
-            code, obj = bridge.save_api(action, data)
+            code, obj = api(action, data)
         except Exception as e:
             bridge._log(f"save api {action} failed: {e}")
             code, obj = 500, {"error": str(e)}
@@ -359,6 +383,7 @@ class LoginBridge:
         self._siteconfigs = {}
         self.logins = {}                  # email -> time of the last game login through this bridge
         self.save_api = None              # set by the app: (action, data) -> (http code, dict)
+        self.mods_api = None              # same, for sharing the host's mods with friends
         self.save_fails = {}
 
     def siteconfig_for(self, host):

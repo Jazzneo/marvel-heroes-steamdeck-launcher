@@ -165,6 +165,10 @@ class PlayScreen(Screen):
                 raise BridgeBlocked("The game would not be able to log in:\n\n• " + "\n• ".join(problems),
                                     integration.find_blocking_web_servers())
             from . import mods as modlib
+            if not skip_mods:
+                offer = self._friend_mods_offer(host, progress)
+                if offer:
+                    return offer
             if self.s.get("mods_dirty") and modlib.is_ready():
                 ms = next(sc for sc in app.screens if sc.name == "mods")
                 ok_m, summary = ms.apply_blocking(progress)
@@ -184,7 +188,76 @@ class PlayScreen(Screen):
                 self.launch_client()
         app.run_task("Getting ready to play", work, done, show_log=True, cancellable=True)
 
-    def _join_go(self):
+    def _friend_mods_offer(self, host, progress):
+        """Worker: does the friend play with mods we don't have (or have turned off)? -> offer dict or None."""
+        from . import mods as modlib, savetransfer
+        try:
+            progress(None, "Checking your friend's mods…")
+            host_mods = savetransfer.remote(host, "list", {}, timeout=20, base="/mhl/mods/").get("mods") or []
+        except Exception:
+            return None                      # old launcher, sharing off, ...: just play
+        if not host_mods:
+            return None
+        key = ",".join(h["fp"] for h in host_mods)
+        if key == self.s.get("friend_mods_skip"):
+            return None
+        if not modlib.is_ready():
+            return {"host_mods": host_mods, "need": host_mods, "enable": [], "total": sum(h["size"] for h in host_mods),
+                    "key": key, "setup": True}
+        need, enable, total = modlib.compare_with(host_mods)
+        if not need and not enable:
+            return None
+        return {"host_mods": host_mods, "need": need, "enable": enable, "total": total, "key": key, "setup": False}
+
+    def _ask_friend_mods(self, host, offer):
+        app = self.app
+        names = [h["name"] for h in offer["need"] + offer["enable"]]
+        shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+
+        def skip():
+            self.s.set("friend_mods_skip", offer["key"])
+            self._join_go(skip_mods=True)
+        from . import mods as modlib
+        msg_size = f" ({modlib.size_text(offer['total'])} to copy" + (
+            ", it can take a while)." if offer["total"] > modlib_share_limit() else ").") if offer["total"] else ""
+        if offer["setup"]:
+            ms = next(sc for sc in app.screens if sc.name == "mods")
+            app.dialog("Your friend plays with mods",
+                       f"Your friend uses {len(names)} mod(s): {shown}. To see the game like they do, set up the Mod "
+                       "Manager once (about a minute), then you can copy their mods with one button.",
+                       [("Not now", skip, "ghost"),
+                        ("Set up", lambda: ms.setup(then=lambda: self._join_go()), "primary")], width=960)
+            return
+        app.dialog("Get your friend's mods?",
+                   f"Your friend plays with {len(names)} mod(s) you don't have or have turned off: {shown}."
+                   f"{msg_size}\n\nMods only change what you see on your own screen, so copy them to see the game "
+                   "like your friend does. Your own mods stay; you can turn any of them off later on the Mods tab.",
+                   [("Not now", skip, "ghost"), ("Get mods & play", lambda: self._get_friend_mods(host, offer),
+                                                 "primary")], width=980)
+
+    def _get_friend_mods(self, host, offer, then_play=True):
+        app = self.app
+        from . import mods as modlib
+        ms = next(sc for sc in app.screens if sc.name == "mods")
+
+        def work(p):
+            got = modlib.get_from_friend(host, offer["host_mods"], progress=lambda f, t=None: p(f, t) if t else p(f))
+            ok, summary = ms.apply_blocking(p)
+            return got, ok, summary
+
+        def done(res):
+            got, ok, summary = res
+            ms.reload()
+            if not ok:
+                app.dialog("Mods copied, but not applied", (summary or "See the log.") +
+                           "\n\nYou can still play; press Apply changes on the Mods tab later.", width=980)
+                return
+            app.toast(f"Your friend's mods are on ({len(offer['host_mods'])})", "ok", 6)
+            if then_play:
+                self._join_go(skip_mods=True)
+        app.run_task("Copying your friend's mods", work, done, show_log=False)
+
+    def _join_go(self, skip_mods=False):
         """PLAY in join mode: no local server, connect to a friend's server."""
         app = self.app
         host = (self.s.get("join_host") or "").strip()
@@ -206,6 +279,10 @@ class PlayScreen(Screen):
                                    "\n\nCheck that their server is on and hosting, that the address is right, "
                                    "and (Tailscale/ZeroTier) that both of you are connected.")
             from . import mods as modlib
+            if not skip_mods:
+                offer = self._friend_mods_offer(host, progress)
+                if offer:
+                    return offer
             if self.s.get("mods_dirty") and modlib.is_ready():
                 ms = next(sc for sc in app.screens if sc.name == "mods")
                 ok_m, summary = ms.apply_blocking(progress)
@@ -215,6 +292,8 @@ class PlayScreen(Screen):
             return True
 
         def done(ok):
+            if isinstance(ok, dict):           # the friend has mods we don't: ask first
+                return self._ask_friend_mods(host, ok)
             if ok:
                 self.launch_client(siteconfig=f"{host}/SiteConfig.xml",
                                    account={"email": self.s.get("join_email"),
@@ -585,12 +664,18 @@ class ServerScreen(Screen):
         opts = list(SERVER_TOGGLES)
         for full, label, default in opts:
             val = srv.option(full, default).lower() == "true"
-            ws.append(ui.Toggle(f"opt_{full}", (tx, y, 380, 56), label, val,
+            ws.append(ui.Toggle(f"opt_{full}", (tx, y, 380, 52), label, val,
                                 lambda v, full=full: self._set_opt(full, v)))
-            y += 62
-        ws.append(ui.Toggle("opt_lan", (tx, y, 380, 56), "Host for friends (Friends tab)",
+            y += 56
+        ws.append(ui.Toggle("opt_lan", (tx, y, 380, 52), "Host for friends (Friends tab)",
                             bool(self.s.get("lan_mode")), self._set_lan))
+        y += 56
+        ws.append(ui.Button("srv_g", (tx, y, 380, 52), "Cash shop points (G)…", self.open_gshop, "secondary", size=18))
         return ws
+
+    def open_gshop(self):
+        from .gshop import GShop
+        self.app.open_modal(GShop(self.app))
 
     def _set_opt(self, full, v):
         self.app.server.set_option(full, "true" if v else "false")
@@ -645,6 +730,11 @@ class ServerScreen(Screen):
             text(surf, "The log appears here when the server runs.", box.center, 16, C["dim"], False, "center")
         surf.set_clip(clip)
         text(surf, "OPTIONS", (X0 + lw + 28, Y0 + 158), 12, C["muted"], True)
+
+
+def modlib_share_limit():
+    from . import mods as modlib
+    return modlib.SHARE_LIMIT
 
 
 # =================================================================== CLIENT
@@ -836,6 +926,8 @@ class SettingsScreen(Screen):
             ("set_fullscreen", "Fullscreen launcher", "fullscreen", "Applies next start"),
             ("set_fwstop", "Close firewall when the server stops", "fw_close_on_server_stop",
              "Hosting: friends' access ends with the server"),
+            ("set_sharemods", "Share my mods with friends", "share_mods",
+             "Friends can copy your turned-on mods"),
         ]
         for i, (key, label, skey, sub) in enumerate(toggles):
             val = self.s.get(skey)

@@ -371,6 +371,8 @@ class App:
         from .config import DATA_DIR
         self.bridge.save_api = savetransfer.make_host_api(self.save_db_file, self.bridge,
                                                           os.path.join(DATA_DIR, "save-backups"))
+        from . import mods as _mods
+        self.bridge.mods_api = _mods.make_host_api(self.settings, lambda: bool(self.settings.get("lan_mode")))
         self.screenshot_mode = screenshot_mode
         self.modals = []
         self.toasts = []

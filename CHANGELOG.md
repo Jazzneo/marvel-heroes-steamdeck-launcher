@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.5.0
+- **Cash shop points (G) without commands.** Server tab → **Cash shop points (G)…**: pick any account on your server (yours or a friend's), see its balance, and press **+1,000 / +10,000 / +100,000 G** or **Other amount…** (a minus amount takes Gs away). You can also set how many Gs new accounts start with.
+  - Works with the server on or off; the new balance shows up at that player's next login. It won't change the balance of someone who is in the game right now, because the server would overwrite it when they log out.
+  - Accounts that have never logged in have no wallet yet. Log in once first.
+- **Your friend sees your mods.** Mods change the game on each player's own Deck, so before, friends only saw their own mods. Now:
+  - When a friend presses PLAY to join you, their launcher asks whether to **copy your mods** (only the ones you have turned on and they're missing or have older versions of). It copies them, turns them on in your order and applies them, then starts the game.
+  - Or on the **Mods tab → Friend's mods** any time.
+  - Their own mods stay, and older copies are kept in the Mod Manager's `removed` folder.
+  - The host decides: **Settings → Share my mods with friends** (on by default). Sharing only works while you host.
+  - Both launchers need v1.5.0 or newer, and the friend needs the Mod Manager set up (the launcher offers it).
+
 ## v1.4.0
 - **Move my heroes (solo ⇄ friend).** Saves live on the server, so your solo heroes and the ones on a friend's server were separate. Now the Friends tab has **Move my heroes**:
   - **Bring to friend**: copies your solo heroes, items and stash to your account on your friend's server.

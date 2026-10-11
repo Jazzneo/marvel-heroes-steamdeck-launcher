@@ -123,6 +123,18 @@ To use the same heroes in both places, press **Move my heroes** on the Friends t
 
 It shows both saves before you choose. The save that gets replaced is backed up first (`~/.local/share/MHLauncher/save-backups/` on that Deck, last 10 kept). Both of you need launcher v1.4.0 or newer and the same MHServerEmu version.
 
+### Cash shop points (G)
+
+Server tab → **Cash shop points (G)…**. Pick an account on your server and press **+1,000**, **+10,000**, **+100,000 G** or **Other amount…**; no console commands needed. Friends' accounts on your server are listed too. The player must not be in the game at that moment (the server saves the wallet when they log out); the new balance shows up when they log in. **New accounts start with … G** sets the starting amount (server restart needed).
+
+## Mods with friends
+
+Mods change the game files on each player's own Deck; the server doesn't know about them. So everyone sees only the mods installed in their own game. To make your friend see what you see, they copy your mods:
+* When they press **PLAY** to join you, the launcher offers **Get mods & play** if you use mods they don't have (or have older versions of, or have turned off).
+* Or they press **Friend's mods** on the Mods tab.
+
+Only mods you have turned on are shared, and only while you host. Turn it off in **Settings → Share my mods with friends**. Their own mods stay, and they can turn your mods off again on their Mods tab.
+
 ### Deck to Deck (no router)
 
 Two Steam Decks can play together with nothing else: one Deck makes its own Wi-Fi hotspot and the other joins it directly. (The Deck's Wi-Fi can't do the old "ad-hoc" mode, so the launcher uses a hotspot instead; it works the same way and is more reliable.)

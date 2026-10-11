@@ -277,6 +277,53 @@ class ModsScreen(Screen):
                     ("Remove", lambda: app.run_task("Removing mod", work, done, show_log=True,
                                                     log_fn=lambda: self.live_log), "danger")])
 
+    def friend_mods(self):
+        """Copy the mods of the friend you join (Friends tab address), so you see the game like they do."""
+        if self._busy_guard():
+            return
+        app = self.app
+        host = (self.s.get("join_host") or "").strip()
+        if not host:
+            app.dialog("Whose mods?", "Enter your friend's address on the Friends tab first (the friend must be "
+                       "hosting with launcher 1.5.0 or newer).")
+            return
+        from . import savetransfer
+
+        def work(p):
+            p(None, f"Asking {host} for their mods…")
+            host_mods = savetransfer.remote(host, "list", {}, timeout=30, base="/mhl/mods/").get("mods") or []
+            need, enable, total = mods.compare_with(host_mods)
+            return host_mods, need, enable, total
+
+        def done(res):
+            if isinstance(res, Exception):
+                app.dialog("Couldn't get your friend's mods", str(res), width=900)
+                return
+            host_mods, need, enable, total = res
+            if not host_mods:
+                app.dialog("No mods", "Your friend doesn't have any mods turned on.")
+                return
+            if not need and not enable:
+                app.toast(f"You already have all {len(host_mods)} of your friend's mods turned on", "ok", 6)
+                return
+            names = [h["name"] for h in need + enable]
+            play = next(sc for sc in app.screens if sc.name == "play")
+            offer = {"host_mods": host_mods, "need": need, "enable": enable, "total": total}
+            app.dialog("Get your friend's mods?",
+                       f"{len(names)} mod(s): {', '.join(names[:5])}{' …' if len(names) > 5 else ''}"
+                       f" ({mods.size_text(total)} to copy). They're turned on with your friend's order, above your "
+                       "own mods. Your own mods stay.",
+                       [("Cancel", None, "ghost"),
+                        ("Get mods", lambda: play._get_friend_mods(host, offer, then_play=False), "primary")],
+                       width=960)
+
+        def guarded(p):
+            try:
+                return work(p)
+            except savetransfer.SaveError as e:
+                return e
+        app.run_task("Friend's mods", guarded, done)
+
     def open_full(self):
         if self._busy_guard():
             return
@@ -312,15 +359,17 @@ class ModsScreen(Screen):
                                 "primary", size=24))
             return ws
         dirty = bool(self.s.get("mods_dirty"))
-        bw = (CW - 3 * 14) // 4
-        ws.append(ui.Button("md_install", (X0, Y0, bw, 58), "Install mod…", self.install, "primary", size=20))
-        ws.append(ui.Button("md_apply", (X0 + (bw + 14), Y0, bw, 58),
+        bw = (CW - 4 * 12) // 5
+        ws.append(ui.Button("md_install", (X0, Y0, bw, 58), "Install mod…", self.install, "primary", size=18))
+        ws.append(ui.Button("md_apply", (X0 + (bw + 12), Y0, bw, 58),
                             "Apply changes" + (" •" if dirty else ""), self.apply,
-                            "success" if dirty else "secondary", size=20))
-        ws.append(ui.Button("md_full", (X0 + 2 * (bw + 14), Y0, bw, 58), "Full Mod Manager", self.open_full,
-                            "secondary", size=19))
-        ws.append(ui.Button("md_update", (X0 + 3 * (bw + 14), Y0, bw, 58), "Update tool", self.update_tool,
-                            "ghost", size=19))
+                            "success" if dirty else "secondary", size=18))
+        ws.append(ui.Button("md_friend", (X0 + 2 * (bw + 12), Y0, bw, 58), "Friend's mods", self.friend_mods,
+                            "secondary", size=18))
+        ws.append(ui.Button("md_full", (X0 + 3 * (bw + 12), Y0, bw, 58), "Full Mod Manager", self.open_full,
+                            "ghost", size=17))
+        ws.append(ui.Button("md_update", (X0 + 4 * (bw + 12), Y0, bw, 58), "Update tool", self.update_tool,
+                            "ghost", size=17))
         items = self.lib.mods if self.lib else []
 
         def render(surf, r, m, sel, focused):
