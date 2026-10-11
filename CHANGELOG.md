@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.2.4
+- **The firewall now closes by itself when you're done playing.** No more forgetting it open:
+  - It closes automatically when you turn off *Host for friends*, when the server stops, and when you quit the launcher – no password needed to close.
+  - Even if the launcher crashes or is force-closed, it closes within a few seconds.
+  - Opening uses temporary firewall rules (firewalld), so a reboot always clears them too.
+  - When you start the server again while hosting, the launcher offers to open it again.
+- New setting: **Close firewall when the server stops** (on by default).
+- Firewall rules left open by v1.2.0–1.2.3 are offered for closing once at start.
+
 ## v1.2.3
 - **Close the firewall after playing with friends.** When you turn off *Host for friends*, the launcher offers to close the firewall again (one password prompt). The Friends tab button switches to **Close firewall** while it's open, and quitting with the firewall still open asks *Close & quit* / *Keep open & quit*.
 - Only the rules the launcher added are removed: opening now records exactly which ports (and the Tailscale trust) it added, so firewall rules you had before stay untouched.

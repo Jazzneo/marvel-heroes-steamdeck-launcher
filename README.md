@@ -114,7 +114,7 @@ One of you **hosts** (runs the server) and the other **joins**. Both need MH Lau
 
 **How it works:** the launcher's login bridge answers each player with the address they actually used. The host's own game gets `127.0.0.1`, and the friend gets the LAN, Tailscale or internet address. It does this for SiteConfig.xml and for the login ticket's game-server address, so one server works for everyone without editing any config.
 
-**Security:** friends can only reach the login, SiteConfig, server status and (if you allow it) account creation. The dashboard and the admin web API stay local. Turn off **Friends can create accounts** to stop new sign-ups. Router ports opened with UPnP are closed again when you stop hosting, and the launcher offers to **close the firewall** again too: it removes only the rules it added. You can also do this any time with **Close firewall** on the Friends tab, or when you quit.
+**Security:** friends can only reach the login, SiteConfig, server status and (if you allow it) account creation. The dashboard and the admin web API stay local. Turn off **Friends can create accounts** to stop new sign-ups. Router ports opened with UPnP are closed again when you stop hosting, and the **firewall closes by itself** when you turn off hosting, when the server stops, or when the launcher closes (even after a crash) – no password needed. It only removes the rules it added, and with firewalld the rules are temporary, so a reboot clears them too. You can also press **Close firewall** on the Friends tab any time.
 
 ## Mods
 

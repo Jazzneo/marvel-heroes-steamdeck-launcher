@@ -302,28 +302,44 @@ def firewall_ports_open(ports=FRIEND_PORTS, fw=None):
     return None
 
 
-def firewall_script(ports=FRIEND_PORTS, fw=None):
-    """Shell lines (run as root) that let friends through the firewall, or [] if none is active.
+def firewall_script(ports=FRIEND_PORTS, fw=None, launcher_pid=None, flag_path=None):
+    """Shell lines (run as root) that let friends through the firewall while hosting, or [] if no firewall.
 
-    Each rule is only added when it isn't there yet, and every rule this adds is printed as 'ADDED:<what>',
-    so closing later removes exactly those (rules you had before stay)."""
+    Safe by design:
+    * firewalld: only *runtime* rules (no --permanent), so they can never outlive a reboot.
+    * Only rules that aren't there yet are added; each is printed as 'ADDED:<what>' (rules you had stay).
+    * A watchdog started by the same root script removes exactly the added rules as soon as the launcher
+      process is gone or the hosting flag file is deleted (stop hosting / server stopped / quit). Closing
+      therefore needs no second password, and a crashed launcher can't leave the firewall open."""
     kind, active = fw or firewall()
     if not active:
         return []
     if kind == "firewalld":
-        lines = [f"firewall-cmd --permanent --query-port={p}/tcp >/dev/null 2>&1 || "
-                 f"{{ firewall-cmd --permanent --add-port={p}/tcp >/dev/null && echo ADDED:{p}; }}" for p in ports]
-        # Tailscale's interface: trusted, like Tailscale recommends
-        lines.append("if ip link show tailscale0 >/dev/null 2>&1 || [ -d /sys/class/net/tailscale0 ]; then "
-                     "firewall-cmd --permanent --zone=trusted --query-interface=tailscale0 >/dev/null 2>&1 || "
-                     "{ firewall-cmd --permanent --zone=trusted --add-interface=tailscale0 >/dev/null && "
-                     "echo ADDED:tailscale0; }; fi")
-        lines.append("firewall-cmd --reload >/dev/null")
-        return lines
-    if kind == "ufw":
-        return [f"ufw status | grep -qE '^{p}/tcp +ALLOW' || {{ ufw allow {p}/tcp comment 'MH Launcher' "
-                f">/dev/null && echo ADDED:{p}; }}" for p in ports]
-    return []
+        lines = ["ADDED=''", "TS=0"]
+        for p in ports:
+            lines.append(f"firewall-cmd --query-port={p}/tcp >/dev/null 2>&1 || {{ firewall-cmd --add-port={p}/tcp "
+                         f">/dev/null && echo ADDED:{p} && ADDED=\"$ADDED {p}\"; }}")
+        lines.append("if [ -d /sys/class/net/tailscale0 ]; then firewall-cmd --zone=trusted "
+                     "--query-interface=tailscale0 >/dev/null 2>&1 || { firewall-cmd --zone=trusted "
+                     "--add-interface=tailscale0 >/dev/null && echo ADDED:tailscale0 && TS=1; }; fi")
+        close_body = ('for p in "$@"; do firewall-cmd --remove-port=$p/tcp >/dev/null 2>&1; done; '
+                      '[ "$TS" = 1 ] && firewall-cmd --zone=trusted --remove-interface=tailscale0 >/dev/null 2>&1')
+    elif kind == "ufw":
+        lines = ["ADDED=''", "TS=0"]
+        for p in ports:
+            lines.append(f"ufw status | grep -qE '^{p}/tcp +ALLOW' || {{ ufw allow {p}/tcp comment 'MH Launcher' "
+                         f">/dev/null && echo ADDED:{p} && ADDED=\"$ADDED {p}\"; }}")
+        close_body = 'for p in "$@"; do ufw delete allow $p/tcp >/dev/null 2>&1; done'
+    else:
+        return []
+    if launcher_pid and flag_path:
+        flag = re.sub(r"[\"'`$\\]", "", flag_path)
+        watch = (f'TS=$1; shift; while kill -0 {int(launcher_pid)} 2>/dev/null && [ -e "{flag}" ]; do sleep 2; done; '
+                 + close_body)
+        # single-quoted: the watchdog's own $1 / $@ / $TS are expanded when it runs, not now
+        lines.append('if [ -n "$ADDED" ] || [ "$TS" = 1 ]; then setsid sh -c \'' + watch +
+                     '\' mhl-firewall-watch "$TS" $ADDED </dev/null >/dev/null 2>&1 & echo WATCHDOG; fi')
+    return lines
 
 
 def parse_added(output):
@@ -339,10 +355,13 @@ def firewall_close_script(ports, tailscale_trusted=False, fw=None):
     if not active or not (ports or tailscale_trusted):
         return []
     if kind == "firewalld":
-        lines = [f"firewall-cmd --permanent --remove-port={p}/tcp >/dev/null 2>&1" for p in ports]
+        lines = []
+        for p in ports:
+            lines.append(f"firewall-cmd --permanent --remove-port={p}/tcp >/dev/null 2>&1")
+            lines.append(f"firewall-cmd --remove-port={p}/tcp >/dev/null 2>&1")
         if tailscale_trusted:
             lines.append("firewall-cmd --permanent --zone=trusted --remove-interface=tailscale0 >/dev/null 2>&1")
-        lines.append("firewall-cmd --reload >/dev/null")
+            lines.append("firewall-cmd --zone=trusted --remove-interface=tailscale0 >/dev/null 2>&1")
         return lines
     if kind == "ufw":
         return [f"ufw delete allow {p}/tcp >/dev/null 2>&1" for p in ports]

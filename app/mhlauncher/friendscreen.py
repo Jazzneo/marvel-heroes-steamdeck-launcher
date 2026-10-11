@@ -1,4 +1,5 @@
 """Friends tab: host your server for friends, or join a friend's server."""
+import os
 import shutil
 import subprocess
 import threading
@@ -10,6 +11,26 @@ from . import ui, network, integration, accounts
 from .ui import C, text, rrect, panel
 from .app import CONTENT
 from .authproxy import ports_allowed
+from .config import DATA_DIR
+
+# While this file exists (and the launcher runs), the firewall stays open for friends. Deleting it makes the
+# root watchdog close the firewall again within ~2 seconds, without asking for a password.
+FIREWALL_FLAG = os.path.join(DATA_DIR, "hosting-firewall.flag")
+
+
+def watchdog_running():
+    """Is a firewall watchdog (started by an earlier open) still alive? /proc cmdlines are world-readable."""
+    for pid in os.listdir("/proc"):
+        if pid.isdigit():
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    if b"mhl-firewall-watch" in f.read():
+                        return True
+            except OSError:
+                pass
+    return False
+
+
 from .screens import Screen, check_row
 
 X0, Y0, CW, CH = CONTENT.x, CONTENT.y, CONTENT.w, CONTENT.h
@@ -98,7 +119,7 @@ class FriendsScreen(Screen):
                 threading.Thread(target=lambda: (network.close_router_ports(), self.s.set("upnp_open", False)),
                                  daemon=True).start()
             self._after_host_change()
-            self.offer_close_firewall()
+            self.close_firewall(reason="hosting turned off")
 
     def _after_host_change(self):
         """Hosting changes how the server listens: restart it if it's running."""
@@ -120,7 +141,7 @@ class FriendsScreen(Screen):
         app = self.app
         need_ports = not ports_allowed()
         snap = network.snapshot()
-        fw_lines = network.firewall_script(fw=snap["fw"])
+        fw_lines = network.firewall_script(fw=snap["fw"], launcher_pid=os.getpid(), flag_path=FIREWALL_FLAG)
         fw_ok = snap["fw_open"] if fw_lines else True
         if not need_ports and (not fw_lines or fw_ok is True):
             if not silent_if_ok:
@@ -136,11 +157,16 @@ class FriendsScreen(Screen):
         if need_ports:
             what.append("open ports 80/443 for the launcher (one time)")
         if fw_lines:
-            what.append(f"allow ports {', '.join(map(str, network.FRIEND_PORTS))} through your firewall ({kind})")
+            what.append(f"open ports {', '.join(map(str, network.FRIEND_PORTS))} in your firewall ({kind}) while you "
+                        "host – it closes again by itself when you stop hosting, the server stops or the launcher "
+                        "closes")
 
         def go():
             def work(p):
                 p(None, "Waiting for your password…")
+                os.makedirs(os.path.dirname(FIREWALL_FLAG), exist_ok=True)
+                with open(FIREWALL_FLAG, "w") as f:
+                    f.write(str(os.getpid()))
                 return integration.run_as_admin("\n".join(lines))
 
             def done(res):
@@ -150,15 +176,19 @@ class FriendsScreen(Screen):
                     if ports or ts:
                         self.s.set("fw_added_ports", sorted(set(self.s.get("fw_added_ports") or []) | set(ports)),
                                    save=False)
-                        self.s.set("fw_added_tailscale", bool(self.s.get("fw_added_tailscale") or ts))
+                        self.s.set("fw_added_tailscale", bool(self.s.get("fw_added_tailscale") or ts), save=False)
+                        self.s.set("fw_watchdog", "WATCHDOG" in info)
                     self.fw_state = True
                     network.mark_firewall_open(True)
                     threading.Thread(target=network.refresh_snapshot, daemon=True).start()
                     app.toast("Friends can reach your server now", "ok")
                 else:
-                    app.dialog("Couldn't open it automatically", f"{info}\n\nOpen Konsole and run:\n\n" +
-                               "\n".join("sudo " + l for l in lines[1:-1] if not l.startswith("ip link")),
-                               width=1000)
+                    try:
+                        os.remove(FIREWALL_FLAG)
+                    except OSError:
+                        pass
+                    app.dialog("Couldn't open it automatically", f"{info}\n\nThe firewall was left closed.",
+                               width=900)
             app.run_task("Opening for friends", work, done)
         app.dialog("Let friends in", "To host, the launcher needs to " + " and ".join(what) +
                    ". You'll be asked for your password once.",
@@ -167,52 +197,102 @@ class FriendsScreen(Screen):
     def firewall_opened_by_us(self):
         return bool(self.s.get("fw_added_ports") or self.s.get("fw_added_tailscale"))
 
-    def close_firewall(self, then=None):
-        """Remove exactly the firewall rules the launcher added for friends (one password prompt)."""
+    def close_firewall(self, then=None, reason=None, quiet=False):
+        """Close what the launcher opened for friends.
+
+        Normal case: delete the hosting flag; the root watchdog removes the rules within ~2 s (no password).
+        Rules from launcher versions before 1.2.4 (permanent, no watchdog) need one password prompt."""
         app = self.app
+        if not self.firewall_opened_by_us():
+            if then:
+                then()
+            return
+        if self.s.get("fw_watchdog"):
+            try:
+                os.remove(FIREWALL_FLAG)
+            except OSError:
+                pass
+
+            def work(p):
+                p(None, "Closing the firewall…")
+                time.sleep(3)           # the watchdog checks every 2 s
+                return True
+
+            def done(_r):
+                self._forget_firewall()
+                if not quiet:
+                    app.toast("Firewall closed" + (f" ({reason})" if reason else "") +
+                              ". Your own games keep working.", "ok", 6)
+                if then:
+                    then()
+            if quiet:
+                threading.Thread(target=lambda: (time.sleep(3), app.call_soon(lambda: done(None))),
+                                 daemon=True).start()
+            else:
+                app.run_task("Closing the firewall", work, done)
+            return
+        # rules opened by an older launcher version: permanent, so remove them as admin
         ports = list(self.s.get("fw_added_ports") or [])
         ts = bool(self.s.get("fw_added_tailscale"))
-        snap = network.snapshot()
-        lines = network.firewall_close_script(ports, ts, fw=snap["fw"])
+        lines = network.firewall_close_script(ports, ts, fw=network.snapshot()["fw"])
         if not lines:
-            self.s.set("fw_added_ports", [], save=False)
-            self.s.set("fw_added_tailscale", False)
-            app.toast("Nothing to close: the launcher didn't open any firewall ports.", "info")
+            self._forget_firewall()
             if then:
                 then()
             return
 
         def work(p):
             p(None, "Waiting for your password…")
-            return integration.run_as_admin("set +e\n" + "\n".join(lines) + "\nexit 0")
+            return integration.run_as_admin("set +e\n" + "\n".join(lines) + "\nfirewall-cmd --reload "
+                                            ">/dev/null 2>&1\nexit 0")
 
         def done(res):
             ok, info = res
             if ok:
-                self.s.set("fw_added_ports", [], save=False)
-                self.s.set("fw_added_tailscale", False)
-                self.fw_state = False
-                network.mark_firewall_open(False)
-                threading.Thread(target=network.refresh_snapshot, daemon=True).start()
+                self._forget_firewall()
                 app.toast("Firewall closed again. Your own games keep working.", "ok", 6)
             else:
                 app.dialog("Couldn't close it automatically", f"{info}\n\nOpen Konsole and run:\n\n" +
-                           "\n".join("sudo " + l.replace(" >/dev/null 2>&1", "").replace(" >/dev/null", "")
-                                      for l in lines), width=1000)
+                           "\n".join("sudo " + l.replace(" >/dev/null 2>&1", "") for l in lines) +
+                           "\nsudo firewall-cmd --reload", width=1000)
             if then:
                 then()
         app.run_task("Closing the firewall", work, done)
 
-    def offer_close_firewall(self):
-        if not self.firewall_opened_by_us():
-            return
-        what = ", ".join(map(str, self.s.get("fw_added_ports") or []))
-        self.app.dialog("Close the firewall again?",
-                        f"While hosting, the launcher opened your firewall for friends"
-                        f"{' (ports ' + what + ')' if what else ''}"
-                        f"{' and trusted Tailscale' if self.s.get('fw_added_tailscale') else ''}. "
-                        "Close it now that you're done? Playing on your own keeps working either way.",
-                        [("Keep open", None, "ghost"), ("Close it", self.close_firewall, "primary")], width=920)
+    def _forget_firewall(self):
+        self.s.set("fw_added_ports", [], save=False)
+        self.s.set("fw_added_tailscale", False, save=False)
+        self.s.set("fw_watchdog", False)
+        self.fw_state = False
+        network.mark_firewall_open(False)
+        threading.Thread(target=network.refresh_snapshot, daemon=True).start()
+
+    def startup_cleanup(self):
+        """At launcher start: the watchdog of an earlier run has closed everything (its launcher is gone)."""
+        title = "Firewall still open from an older version"
+        body = "An earlier version of the launcher left your firewall open for friends"
+        if self.s.get("fw_watchdog"):
+            try:
+                os.remove(FIREWALL_FLAG)
+            except OSError:
+                pass
+            # firewalld rules are runtime-only (a reboot clears them too). ufw stores its rules on disk, so if the
+            # PC was switched off while hosting, the watchdog never got to remove them -> close them now.
+            if network.firewall()[0] == "ufw" and not watchdog_running():
+                self.s.set("fw_watchdog", False)
+                title = "Firewall still open"
+                body = "The PC was switched off while you were hosting, so your firewall is still open for friends"
+            else:
+                self.s.set("fw_added_ports", [], save=False)
+                self.s.set("fw_added_tailscale", False, save=False)
+                self.s.set("fw_watchdog", False)
+                return
+        if self.firewall_opened_by_us():
+            # permanent rules (launcher v1.2.0-1.2.3, or ufw after a power-off): offer to close them once
+            self.app.call_soon(lambda: self.app.dialog(
+                title, body + " (ports " + ", ".join(map(str, self.s.get("fw_added_ports") or [])) +
+                "). Close it now? From now on the launcher closes it by itself.",
+                [("Later", None, "ghost"), ("Close it", self.close_firewall, "primary")], width=940))
 
     def open_router(self):
         app = self.app
@@ -437,7 +517,7 @@ class FriendsScreen(Screen):
             kind, active = snap["fw"]
             rows.append((True if (not active or fw) else (None if fw is None else False), "Firewall",
                          "No firewall active" if not active else (
-                             "Open for friends – close it when you're done" if (fw and self.firewall_opened_by_us())
+                             "Open while hosting – closes by itself when you stop" if (fw and self.firewall_opened_by_us())
                              else "Open for friends" if fw else
                                                                     "Press 'Open firewall'" if fw is False else
                                                                     "Can't check – press 'Open firewall' once")))

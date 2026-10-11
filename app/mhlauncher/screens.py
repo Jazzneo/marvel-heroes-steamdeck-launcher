@@ -834,6 +834,8 @@ class SettingsScreen(Screen):
             ("set_stopexit", "Stop server when the launcher closes", "stop_server_on_exit", None),
             ("set_remember", "Remember passwords", "remember_passwords", "Stored in ~/.config (owner only)"),
             ("set_fullscreen", "Fullscreen launcher", "fullscreen", "Applies next start"),
+            ("set_fwstop", "Close firewall when the server stops", "fw_close_on_server_stop",
+             "Hosting: friends' access ends with the server"),
         ]
         for i, (key, label, skey, sub) in enumerate(toggles):
             val = self.s.get(skey)

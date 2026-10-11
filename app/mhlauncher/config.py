@@ -4,7 +4,7 @@ import os
 import threading
 
 APP_NAME = "MHLauncher"
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 # Folder that contains MHLauncher.sh (two levels above this file: app/mhlauncher/config.py)
 BUNDLE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -43,6 +43,8 @@ DEFAULTS = {
     "friends_can_register": True,
     "fw_added_ports": [],       # firewall ports the launcher opened for friends (closed again on request)
     "fw_added_tailscale": False,
+    "fw_watchdog": False,       # the opened rules are runtime-only and watched (close without a password)
+    "fw_close_on_server_stop": True,
     "join_mode": False,         # PLAY joins a friend's server instead of your own
     "join_host": "",
     "join_email": "",

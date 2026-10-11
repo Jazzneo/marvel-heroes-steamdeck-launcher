@@ -391,6 +391,7 @@ class App:
                         ModsScreen(self), screens.ServerScreen(self), screens.ClientScreen(self),
                         screens.SettingsScreen(self)]
         self.screen_i = 0
+        self._srv_was_online = False
         # first run: install the server that ships with the launcher
         try:
             self.server.install_bundled()
@@ -646,7 +647,8 @@ class App:
     def request_quit(self):
         if self.quitting:
             return
-        if (self.settings.get("fw_added_ports") or self.settings.get("fw_added_tailscale")) and not self.modals:
+        if (self.settings.get("fw_added_ports") or self.settings.get("fw_added_tailscale")) and not self.modals \
+                and not self.settings.get("fw_watchdog"):
             fs = next(sc for sc in self.screens if sc.name == "friends")
             self.dialog("Firewall still open for friends",
                         "The launcher opened your firewall for friends and it's still open. Close it before you go?",
@@ -673,6 +675,11 @@ class App:
 
     def _quit_now(self):
         self.quitting = True
+        try:
+            from .friendscreen import FIREWALL_FLAG
+            os.remove(FIREWALL_FLAG)
+        except OSError:
+            pass
 
         def work(p):
             if self.server.running:
@@ -1035,6 +1042,21 @@ class App:
                 self.toast("Game closed", "info")
         for s in self.screens:
             s.update()
+        self._watch_server_for_firewall()
+
+    def _watch_server_for_firewall(self):
+        """Firewall follows the server while hosting: offer to open it when the server comes online, close it
+        when the server stops (done playing)."""
+        online = self.server.state == "Online"
+        if online == self._srv_was_online:
+            return
+        self._srv_was_online = online
+        fs = next(sc for sc in self.screens if sc.name == "friends")
+        if online and self.settings.get("lan_mode"):
+            fs.open_access(silent_if_ok=True)
+        elif not online and fs.firewall_opened_by_us() and self.settings.get("fw_watchdog") \
+                and self.settings.get("fw_close_on_server_stop"):
+            fs.close_firewall(reason="server stopped")
 
     def run(self):
         os.environ.setdefault("SDL_VIDEO_X11_WMCLASS", "MHLauncher")
@@ -1059,6 +1081,7 @@ class App:
         pygame.key.stop_text_input()
         self._open_controllers()
         self.go(0)
+        next(sc for sc in self.screens if sc.name == "friends").startup_cleanup()
         leftovers = find_mhserveremu_pids()
         if leftovers:
             self.offer_stop_leftover(leftovers)
