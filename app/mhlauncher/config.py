@@ -4,7 +4,7 @@ import os
 import threading
 
 APP_NAME = "MHLauncher"
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.3.0"
 
 # Folder that contains MHLauncher.sh (two levels above this file: app/mhlauncher/config.py)
 BUNDLE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -43,8 +43,11 @@ DEFAULTS = {
     "friends_can_register": True,
     "fw_added_ports": [],       # firewall ports the launcher opened for friends (closed again on request)
     "fw_added_tailscale": False,
+    "fw_added_other": [],       # zone rules like "nm-shared/80" (Deck-to-Deck hotspot zone)
     "fw_watchdog": False,       # the opened rules are runtime-only and watched (close without a password)
     "fw_close_on_server_stop": True,
+    "hotspot_ssid": "",         # Deck to Deck: name of this Deck's hotspot (MHL-…)
+    "hotspot_password": "",     # 8 digits, made on first use
     "join_mode": False,         # PLAY joins a friend's server instead of your own
     "join_host": "",
     "join_email": "",

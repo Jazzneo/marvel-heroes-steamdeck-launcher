@@ -74,6 +74,7 @@ def address_options(snap=None):
     """[(kind, label, address_or_None, help)] for the Friends tab (from the cached snapshot)."""
     snap = snap or snapshot()
     lan, ts, zt = snap["lan"], snap["tailscale"], snap["zerotier"]
+    hs = snap.get("hotspot")
     return [
         ("tailscale", f"Tailscale  {ts}" if ts else "Tailscale (not running)", ts,
          "Free virtual network. Both of you install Tailscale and join the same tailnet (share your machine). "
@@ -82,6 +83,10 @@ def address_options(snap=None):
          "Your friend is on the same network as you."),
         ("zerotier", f"ZeroTier  {zt}" if zt else "ZeroTier (not running)", zt,
          "Free virtual network like Tailscale: both join the same ZeroTier network."),
+        ("direct", f"Deck to Deck (hotspot)  {hs[1]}" if hs else "Deck to Deck (own Wi-Fi hotspot)",
+         hs[1] if hs else None,
+         "No router or internet needed: this Deck makes its own Wi-Fi and the other Deck joins it with "
+         "'Find Deck' on its Friends tab. Your usual Wi-Fi comes back when you stop."),
         ("internet", "Internet (open router ports with UPnP)", None,
          "The launcher asks your router to forward ports 80, 443 and 4306. Needs UPnP on the router and no "
          "CGNAT from your provider."),
@@ -95,19 +100,31 @@ import threading
 import time as _time
 
 _snap = {"at": 0.0, "lan": "127.0.0.1", "tailscale": None, "zerotier": None,
-         "fw": (None, False), "fw_open": None}
+         "fw": (None, False), "fw_open": None, "hotspot": None, "joined": None}
 _snap_lock = threading.Lock()
 _refreshing = threading.Event()
 
 
 def refresh_snapshot():
     """Full refresh (starts programs; call from a background thread)."""
+    t0 = _time.time()
     new = {"lan": lan_ip(), "tailscale": tailscale_ip(ask_cli=True), "zerotier": zerotier_ip()}
+    from . import hotspot
+    if hotspot.available():
+        new["hotspot"] = hotspot.host_status()
+        new["joined"] = hotspot.joined()
     fw = firewall()
     new["fw"] = fw
-    new["fw_open"] = firewall_ports_open(fw=fw) if fw[1] else True
+    iface = new["hotspot"][0] if new.get("hotspot") else None
+    new["fw_open"] = firewall_ports_open(fw=fw, iface=iface) if fw[1] else True
     new["at"] = _time.time()
     with _snap_lock:
+        # the launcher changed something while this refresh ran: keep its fresher value
+        if _snap.get("hs_mark", 0) > t0:
+            new.pop("hotspot", None)
+            new.pop("joined", None)
+        if _snap.get("fw_mark", 0) > t0:
+            new.pop("fw_open", None)
         _snap.update(new)
     return dict(_snap)
 
@@ -121,10 +138,19 @@ def _refresh_bg():
         _refreshing.clear()
 
 
+def mark_hotspot(host=None, joined=None):
+    """Update the cached hotspot state right after the launcher changed it."""
+    with _snap_lock:
+        _snap["hotspot"] = host
+        _snap["joined"] = joined
+        _snap["hs_mark"] = _time.time()
+
+
 def mark_firewall_open(is_open):
     """Update the cached firewall state right after the launcher changed it."""
     with _snap_lock:
         _snap["fw_open"] = is_open
+        _snap["fw_mark"] = _time.time()
 
 
 def snapshot(max_age=15.0):
@@ -282,27 +308,44 @@ def firewall():
     return None, False
 
 
-def firewall_ports_open(ports=FRIEND_PORTS, fw=None):
-    """True / False when it can tell, None when it can't (querying may need admin rights)."""
+def _iface_zone(iface):
+    """firewalld zone of an interface when it differs from the default zone (e.g. 'nm-shared' for a hotspot)."""
+    if not iface:
+        return None
+    try:
+        z = subprocess.run(["firewall-cmd", f"--get-zone-of-interface={iface}"], capture_output=True, text=True,
+                           timeout=5).stdout.strip()
+        d = subprocess.run(["firewall-cmd", "--get-default-zone"], capture_output=True, text=True,
+                           timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return z if z and z != d else None
+
+
+def firewall_ports_open(ports=FRIEND_PORTS, fw=None, iface=None):
+    """True / False when it can tell, None when it can't (querying may need admin rights).
+    iface: also check the zone of that interface (the Deck-to-Deck hotspot lives in its own zone)."""
     kind, active = fw or firewall()
     if not active:
         return True
     if kind == "firewalld":
+        zone = _iface_zone(iface)
         try:
             for p in ports:
-                r = subprocess.run(["firewall-cmd", f"--query-port={p}/tcp"], capture_output=True,
-                                   text=True, timeout=5)
-                if r.returncode not in (0, 1):
-                    return None
-                if r.returncode == 1:
-                    return False
+                for z in ([None, zone] if zone else [None]):
+                    r = subprocess.run(["firewall-cmd"] + ([f"--zone={z}"] if z else []) + [f"--query-port={p}/tcp"],
+                                       capture_output=True, text=True, timeout=5)
+                    if r.returncode not in (0, 1):
+                        return None
+                    if r.returncode == 1:
+                        return False
             return True
         except (OSError, subprocess.SubprocessError):
             return None
     return None
 
 
-def firewall_script(ports=FRIEND_PORTS, fw=None, launcher_pid=None, flag_path=None):
+def firewall_script(ports=FRIEND_PORTS, fw=None, launcher_pid=None, flag_path=None, iface=None):
     """Shell lines (run as root) that let friends through the firewall while hosting, or [] if no firewall.
 
     Safe by design:
@@ -319,10 +362,19 @@ def firewall_script(ports=FRIEND_PORTS, fw=None, launcher_pid=None, flag_path=No
         for p in ports:
             lines.append(f"firewall-cmd --query-port={p}/tcp >/dev/null 2>&1 || {{ firewall-cmd --add-port={p}/tcp "
                          f">/dev/null && echo ADDED:{p} && ADDED=\"$ADDED {p}\"; }}")
+        if iface and re.fullmatch(r"[A-Za-z0-9_.-]+", iface):
+            # the hotspot interface sits in its own zone (NetworkManager 'nm-shared'): open the ports there too
+            lines.append(f"Z=$(firewall-cmd --get-zone-of-interface={iface} 2>/dev/null); "
+                         "D=$(firewall-cmd --get-default-zone 2>/dev/null)")
+            for p in ports:
+                lines.append(f'if [ -n "$Z" ] && [ "$Z" != "$D" ]; then firewall-cmd --zone=$Z --query-port={p}/tcp '
+                             f'>/dev/null 2>&1 || {{ firewall-cmd --zone=$Z --add-port={p}/tcp >/dev/null && '
+                             f'echo ADDED:$Z/{p} && ADDED="$ADDED $Z/{p}"; }}; fi')
         lines.append("if [ -d /sys/class/net/tailscale0 ]; then firewall-cmd --zone=trusted "
                      "--query-interface=tailscale0 >/dev/null 2>&1 || { firewall-cmd --zone=trusted "
                      "--add-interface=tailscale0 >/dev/null && echo ADDED:tailscale0 && TS=1; }; fi")
-        close_body = ('for p in "$@"; do firewall-cmd --remove-port=$p/tcp >/dev/null 2>&1; done; '
+        close_body = ('for p in "$@"; do case $p in */*) firewall-cmd --zone=${p%/*} --remove-port=${p#*/}/tcp '
+                      '>/dev/null 2>&1;; *) firewall-cmd --remove-port=$p/tcp >/dev/null 2>&1;; esac; done; '
                       '[ "$TS" = 1 ] && firewall-cmd --zone=trusted --remove-interface=tailscale0 >/dev/null 2>&1')
     elif kind == "ufw":
         lines = ["ADDED=''", "TS=0"]
@@ -343,10 +395,11 @@ def firewall_script(ports=FRIEND_PORTS, fw=None, launcher_pid=None, flag_path=No
 
 
 def parse_added(output):
-    """What an open script added: (ports, tailscale_trusted)."""
+    """What an open script added: (ports, tailscale_trusted, zone_rules like 'nm-shared/80')."""
     added = re.findall(r"ADDED:(\S+)", output or "")
     ports = sorted({int(a) for a in added if a.isdigit()})
-    return ports, "tailscale0" in added
+    zoned = sorted({a for a in added if "/" in a})
+    return ports, "tailscale0" in added, zoned
 
 
 def firewall_close_script(ports, tailscale_trusted=False, fw=None):

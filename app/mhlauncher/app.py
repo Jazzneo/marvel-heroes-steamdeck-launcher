@@ -513,10 +513,18 @@ class App:
             return zt or lan
         if kind == "internet":
             return self.settings.get("public_ip") or lan
+        if kind == "direct":
+            if live:
+                from . import hotspot
+                hs = hotspot.host_status()
+            else:
+                hs = snap.get("hotspot")
+            return hs[1] if hs else None
         return lan
 
     def server_lan_ip(self):
-        return self.host_address(live=True)
+        # hosting must always listen on every interface, even before the Deck-to-Deck hotspot is up
+        return self.host_address(live=True) or (lan_ip() if self.settings.get("lan_mode") else None)
 
     def start_server_blocking(self, progress, wait_online=True, timeout=300):
         """Worker-thread helper: start bridge + server and optionally wait until online."""
@@ -686,6 +694,16 @@ class App:
                 p(None, "Saving players and shutting down the server…")
                 self.server.stop()
             self.bridge.stop()
+            from . import network
+            snap = network.snapshot()
+            if snap.get("hotspot") or snap.get("joined"):
+                p(None, "Switching Wi-Fi back to your usual network…")
+                try:
+                    from . import hotspot
+                    hotspot.stop_host()
+                    hotspot.leave()
+                except Exception as e:
+                    print("[hotspot] cleanup on quit failed:", e)
         self.run_task("Closing", work, lambda _r: setattr(self, "running", False), show_log=True)
 
     # ---------------------------------------------------------- input

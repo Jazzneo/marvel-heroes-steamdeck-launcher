@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.0
+- **Deck to Deck: two Steam Decks play together with no router and no internet.** One Deck makes its own Wi-Fi hotspot right from the Friends tab (*How your friend reaches you → Deck to Deck*), and the other Deck presses **Find Deck**, picks it and types the 8-digit password. The address is filled in for you and *Play on my friend's server* switches on.
+  - Your usual Wi-Fi comes back by itself when you stop hosting, leave, or close the launcher, and after a crash at the next start.
+  - The hotspot is never started on its own after a reboot, and a wrong password isn't saved.
+  - Works on LCD and OLED Decks, and on Linux PCs with NetworkManager. With firewalld (Bazzite), the game ports are also opened in the hotspot's own firewall zone and closed again automatically.
+  - Steam Deck Wi-Fi can't do the old "ad-hoc" mode, so the launcher uses a hotspot, which works the same way and is more reliable.
+
 ## v1.2.4
 - **The firewall now closes by itself when you're done playing.** No more forgetting it open:
   - It closes automatically when you turn off *Host for friends*, when the server stops, and when you quit the launcher – no password needed to close.

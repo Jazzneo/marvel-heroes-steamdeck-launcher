@@ -7,7 +7,7 @@ import time
 
 import pygame
 
-from . import ui, network, integration, accounts
+from . import ui, network, integration, accounts, hotspot
 from .ui import C, text, rrect, panel
 from .app import CONTENT
 from .authproxy import ports_allowed
@@ -111,6 +111,9 @@ class FriendsScreen(Screen):
                            "the Tailscale Flatpak or tailscale.com/download), log in, and share this machine with "
                            "your friend. Or pick another way on the Friends tab.")
             self._after_host_change()
+            if kind == "direct":
+                self.start_hotspot()
+                return
             self.open_access(silent_if_ok=True)
             if kind == "internet":
                 self.open_router()
@@ -120,6 +123,8 @@ class FriendsScreen(Screen):
                                  daemon=True).start()
             self._after_host_change()
             self.close_firewall(reason="hosting turned off")
+            if network.snapshot().get("hotspot"):
+                self.stop_hotspot()
 
     def _after_host_change(self):
         """Hosting changes how the server listens: restart it if it's running."""
@@ -141,7 +146,9 @@ class FriendsScreen(Screen):
         app = self.app
         need_ports = not ports_allowed()
         snap = network.snapshot()
-        fw_lines = network.firewall_script(fw=snap["fw"], launcher_pid=os.getpid(), flag_path=FIREWALL_FLAG)
+        iface = snap["hotspot"][0] if snap.get("hotspot") else None
+        fw_lines = network.firewall_script(fw=snap["fw"], launcher_pid=os.getpid(), flag_path=FIREWALL_FLAG,
+                                           iface=iface)
         fw_ok = snap["fw_open"] if fw_lines else True
         if not need_ports and (not fw_lines or fw_ok is True):
             if not silent_if_ok:
@@ -172,9 +179,11 @@ class FriendsScreen(Screen):
             def done(res):
                 ok, info = res
                 if ok:
-                    ports, ts = network.parse_added(info)
-                    if ports or ts:
+                    ports, ts, zoned = network.parse_added(info)
+                    if ports or ts or zoned:
                         self.s.set("fw_added_ports", sorted(set(self.s.get("fw_added_ports") or []) | set(ports)),
+                                   save=False)
+                        self.s.set("fw_added_other", sorted(set(self.s.get("fw_added_other") or []) | set(zoned)),
                                    save=False)
                         self.s.set("fw_added_tailscale", bool(self.s.get("fw_added_tailscale") or ts), save=False)
                         self.s.set("fw_watchdog", "WATCHDOG" in info)
@@ -195,7 +204,7 @@ class FriendsScreen(Screen):
                    [("Not now", None, "ghost"), ("Open it", go, "primary")], width=900)
 
     def firewall_opened_by_us(self):
-        return bool(self.s.get("fw_added_ports") or self.s.get("fw_added_tailscale"))
+        return bool(self.s.get("fw_added_ports") or self.s.get("fw_added_tailscale") or self.s.get("fw_added_other"))
 
     def close_firewall(self, then=None, reason=None, quiet=False):
         """Close what the launcher opened for friends.
@@ -260,6 +269,7 @@ class FriendsScreen(Screen):
         app.run_task("Closing the firewall", work, done)
 
     def _forget_firewall(self):
+        self.s.set("fw_added_other", [], save=False)
         self.s.set("fw_added_ports", [], save=False)
         self.s.set("fw_added_tailscale", False, save=False)
         self.s.set("fw_watchdog", False)
@@ -284,9 +294,12 @@ class FriendsScreen(Screen):
                 body = "The PC was switched off while you were hosting, so your firewall is still open for friends"
             else:
                 self.s.set("fw_added_ports", [], save=False)
+                self.s.set("fw_added_other", [], save=False)
                 self.s.set("fw_added_tailscale", False, save=False)
                 self.s.set("fw_watchdog", False)
+                self._cleanup_hotspot_leftovers()
                 return
+        self._cleanup_hotspot_leftovers()
         if self.firewall_opened_by_us():
             # permanent rules (launcher v1.2.0-1.2.3, or ufw after a power-off): offer to close them once
             self.app.call_soon(lambda: self.app.dialog(
@@ -314,9 +327,165 @@ class FriendsScreen(Screen):
     def set_kind(self, i):
         opts = self.kinds()
         kind = opts[i][0]
+        old = self.s.get("host_kind")
         self.s.set("host_kind", kind)
+        if old == "direct" and kind != "direct" and network.snapshot().get("hotspot"):
+            self.stop_hotspot()
         if self.s.get("lan_mode") and kind == "internet" and not self.s.get("upnp_open"):
             self.open_router()
+
+    # --------------------------------------------------------------- Deck to Deck
+    def _cleanup_hotspot_leftovers(self):
+        """A crashed launcher may have left the hotspot on: switch Wi-Fi back to normal (in the background)."""
+        def work():
+            try:
+                left = hotspot.cleanup_leftovers()
+            except Exception as e:
+                print("[hotspot] cleanup failed:", e)
+                return
+            if left:
+                network.mark_hotspot(None, None)
+                self.app.call_soon(lambda: self.app.toast("Turned off a Deck-to-Deck hotspot left from last time",
+                                                          "info", 6))
+        threading.Thread(target=work, daemon=True).start()
+
+    def hotspot_creds(self):
+        ssid = self.s.get("hotspot_ssid")
+        pw = self.s.get("hotspot_password")
+        if not ssid:
+            acc = self.s.active_account() or {}
+            ssid = hotspot.make_ssid(acc.get("player") or "")
+            self.s.set("hotspot_ssid", ssid, save=False)
+        if not pw or len(pw) < 8:
+            pw = hotspot.make_password()
+            self.s.set("hotspot_password", pw, save=False)
+        self.s.save()
+        return ssid, pw
+
+    def start_hotspot(self, confirm=True):
+        app = self.app
+        if not hotspot.available():
+            app.dialog("Deck to Deck isn't available", "This system doesn't use NetworkManager (nmcli), which the "
+                       "launcher needs to make a Wi-Fi hotspot. Pick another way on the Friends tab.", width=900)
+            return
+        if confirm:
+            app.dialog("Start Deck-to-Deck hotspot?",
+                       "This Deck's Wi-Fi turns into its own small network for your friend's Deck. While it's on, "
+                       "this Deck has no internet (the game and server don't need it). Your usual Wi-Fi comes back "
+                       "when you stop hosting or close the launcher.",
+                       [("Cancel", None, "ghost"), ("Start hotspot", lambda: self.start_hotspot(False), "primary")],
+                       width=940)
+            return
+        ssid, pw = self.hotspot_creds()
+
+        def work(p):
+            p(None, f"Starting Wi-Fi hotspot {ssid}…")
+            return hotspot.start_host(ssid, pw)
+
+        def done(res):
+            dev, ip = res
+            network.mark_hotspot((dev, ip), None)
+            self.options = network.address_options(network.snapshot())
+            if not self.s.get("lan_mode"):
+                self.s.set("lan_mode", True)
+                self.s.set("join_mode", False)
+                self._after_host_change()
+            app.dialog("Hotspot is on",
+                       f"On your friend's Deck: Friends tab → Find Deck, pick {ssid} and type the password "
+                       f"{pw}.\n\nThen they create an account on your server (once) and press PLAY.", width=900)
+            threading.Thread(target=network.refresh_snapshot, daemon=True).start()
+            self.open_access(silent_if_ok=True)
+        app.run_task("Deck to Deck", work, done)
+
+    def stop_hotspot(self):
+        def work(p):
+            p(None, "Turning off the hotspot and reconnecting your usual Wi-Fi…")
+            hotspot.stop_host()
+
+        def done(_r):
+            network.mark_hotspot(None, network.snapshot().get("joined"))
+            self.options = network.address_options(network.snapshot())
+            threading.Thread(target=network.refresh_snapshot, daemon=True).start()
+            self.app.toast("Hotspot off – your usual Wi-Fi reconnects by itself", "ok", 6)
+        self.app.run_task("Deck to Deck", work, done)
+
+    def new_hotspot_password(self):
+        self.s.set("hotspot_password", hotspot.make_password())
+        if network.snapshot().get("hotspot"):
+            self.start_hotspot(confirm=False)     # restart with the new password
+
+    def find_deck(self):
+        app = self.app
+        if network.snapshot().get("joined"):
+            return self.leave_deck()
+        if not hotspot.available():
+            self.join_msg = ("Finding a Deck needs NetworkManager (nmcli), which this system doesn't have.", "error")
+            return
+
+        def work(p):
+            p(None, "Looking for a Deck hotspot nearby…")
+            return hotspot.scan()
+
+        def done(found):
+            if not found:
+                self.join_msg = ("No Deck hotspot found. On the other Deck: Friends tab → Host for friends → "
+                                 "'Deck to Deck (own Wi-Fi hotspot)'. Keep the Decks close, then press Find Deck "
+                                 "again.", "error")
+                return
+            buttons = [(f"{ssid[len(hotspot.SSID_PREFIX):]}  {sig}%", (lambda ssid=ssid: self._ask_password(ssid)),
+                        "primary" if i == 0 else "secondary") for i, (ssid, sig) in enumerate(found[:3])]
+            app.dialog("Pick your friend's Deck",
+                       "Found " + ", ".join(s for s, _ in found[:3]) + ". Your friend sees the name and password on "
+                       "their Friends tab.", [("Cancel", None, "ghost")] + buttons, width=1060)
+        app.run_task("Find Deck", work, done)
+
+    def _ask_password(self, ssid):
+        self.app.open_keyboard(f"Wi-Fi password for {ssid}", "", lambda pw: self._join_deck(ssid, pw), password=False)
+
+    def _join_deck(self, ssid, pw):
+        app = self.app
+        if len(pw) < 8:
+            self.join_msg = ("The hotspot password has 8 digits – check your friend's Friends tab.", "error")
+            return
+
+        def work(p):
+            p(None, f"Connecting to {ssid}…")
+            try:
+                host = hotspot.join(ssid, pw)
+            except hotspot.HotspotError as e:
+                return None, [str(e)]
+            p(None, "Checking your friend's server…")
+            problems = network.check_host(host)
+            return host, problems
+
+        def done(res):
+            host, problems = res
+            if host is None:
+                self.join_msg = (f"Couldn't join {ssid}: {problems[0]} Press Find Deck to try again.", "error")
+                return
+            network.mark_hotspot(network.snapshot().get("hotspot"), ssid)
+            self.s.set("join_host", host)
+            if self.s.get("lan_mode"):
+                self.set_hosting(False)
+            self.s.set("join_mode", True)
+            if problems:
+                self.join_msg = (f"Connected to {ssid}, but the server didn't answer yet: " + problems[0] +
+                                 " Make sure your friend's server is ON, then press Test connection.", "info")
+            else:
+                self.join_msg = (f"Connected to {ssid}! Create an account on your friend's server once (fill in "
+                                 "the fields and press Create account there), then press PLAY.", "ok")
+        app.run_task("Joining Deck", work, done)
+
+    def leave_deck(self):
+        def work(p):
+            p(None, "Leaving the hotspot and reconnecting your usual Wi-Fi…")
+            hotspot.leave()
+
+        def done(_r):
+            network.mark_hotspot(network.snapshot().get("hotspot"), None)
+            threading.Thread(target=network.refresh_snapshot, daemon=True).start()
+            self.join_msg = ("Left your friend's hotspot. Your usual Wi-Fi reconnects by itself.", "info")
+        self.app.run_task("Leaving Deck", work, done)
 
     def setup_tailscale(self):
         app = self.app
@@ -375,6 +544,14 @@ class FriendsScreen(Screen):
         app.run_task("Setting up Tailscale", work, done)
 
     def copy_invite(self):
+        if self.s.get("host_kind") == "direct":
+            ssid, pw = self.hotspot_creds()
+            addr = f"Wi-Fi {ssid}, password {pw}"
+            if copy_to_clipboard(addr):
+                self.app.toast(f"Copied – {addr}", "ok")
+            else:
+                self.app.toast(addr, "info", 8)
+            return
         addr = self.invite()
         if not addr:
             return
@@ -388,6 +565,8 @@ class FriendsScreen(Screen):
         self.s.set("join_mode", bool(on))
         if on and self.s.get("lan_mode"):
             self.set_hosting(False)
+        if not on and network.snapshot().get("joined"):
+            self.leave_deck()
         self.app.toast("PLAY now joins your friend's server" if on else "PLAY uses your own server again", "info")
 
     def setf(self, key):
@@ -449,9 +628,19 @@ class FriendsScreen(Screen):
         if cur == "tailscale" and not network.snapshot()["tailscale"]:
             ws.append(ui.Button("fr_ts", (LX + 20, Y0 + 220, w, 50), "Set up Tailscale", self.setup_tailscale,
                                 "primary", size=18))
+        elif cur == "direct":
+            hw = (w - 12) // 2
+            if network.snapshot().get("hotspot"):
+                ws.append(ui.Button("fr_ts", (LX + 20, Y0 + 220, hw, 50), "Stop hotspot", self.stop_hotspot,
+                                    "danger", size=17))
+            else:
+                ws.append(ui.Button("fr_ts", (LX + 20, Y0 + 220, hw, 50), "Start hotspot", self.start_hotspot,
+                                    "primary", size=17))
+            ws.append(ui.Button("fr_newpw", (LX + 20 + hw + 12, Y0 + 220, hw, 50), "New password",
+                                self.new_hotspot_password, "ghost", size=17))
         if host_on:
             ws.append(ui.Button("fr_copy", (LX + COL - 20 - 120, Y0 + 292, 120, 50), "Copy", self.copy_invite,
-                                "secondary", size=18, enabled=bool(self.invite())))
+                                "secondary", size=18, enabled=bool(self.invite()) or cur == "direct"))
         bw = (w - 12) // 2
         if self.firewall_opened_by_us():
             ws.append(ui.Button("fr_open", (LX + 20, CONTENT.bottom - 66, bw, 50), "Close firewall",
@@ -468,8 +657,12 @@ class FriendsScreen(Screen):
         # join column
         ws.append(ui.Toggle("fr_join", (RX + 20, Y0 + 66, w, 62), "Play on my friend's server",
                             bool(self.s.get("join_mode")), self.set_join, sub="PLAY joins them instead"))
-        ws.append(ui.TextField("fr_jhost", (RX + 20, Y0 + 142, w, 66), "Friend's address", self.s.get("join_host"),
-                               self.setf("join_host"), placeholder="e.g. 100.101.102.103"))
+        fw_ = 150
+        ws.append(ui.TextField("fr_jhost", (RX + 20, Y0 + 142, w - fw_ - 12, 66), "Friend's address",
+                               self.s.get("join_host"), self.setf("join_host"), placeholder="e.g. 100.101.102.103"))
+        joined = network.snapshot().get("joined")
+        ws.append(ui.Button("fr_jfind", (RX + 20 + w - fw_, Y0 + 142, fw_, 66), "Leave Deck" if joined else "Find Deck",
+                            self.find_deck, "danger" if joined else "secondary", size=17))
         ws.append(ui.TextField("fr_jemail", (RX + 20, Y0 + 220, w, 66), "Your email on their server",
                                self.s.get("join_email"), self.setf("join_email"), placeholder="me@deck.local"))
         ws.append(ui.TextField("fr_jplayer", (RX + 20, Y0 + 298, bw, 66), "Player name", self.s.get("join_player"),
@@ -490,7 +683,7 @@ class FriendsScreen(Screen):
         # host column details
         opts = self.kinds()
         cur = next((o for o in opts if o[0] == self.s.get("host_kind")), opts[0])
-        show_help = not (cur[0] == "tailscale" and not network.snapshot()["tailscale"])
+        show_help = not (cur[0] == "tailscale" and not network.snapshot()["tailscale"]) and cur[0] != "direct"
         clip = surf.get_clip()
         surf.set_clip(pygame.Rect(LX, Y0 + 216, COL, 58))
         if show_help:
@@ -498,7 +691,18 @@ class FriendsScreen(Screen):
         surf.set_clip(clip)
         box = pygame.Rect(LX + 20, Y0 + 276, COL - 40, 82)
         rrect(surf, C["bg2"], box, 14)
-        if self.s.get("lan_mode"):
+        if cur[0] == "direct":
+            ssid, pw = self.s.get("hotspot_ssid"), self.s.get("hotspot_password")
+            on = bool(network.snapshot().get("hotspot"))
+            text(surf, "HOTSPOT ON – TELL YOUR FRIEND" if on else "HOTSPOT OFF", (box.x + 16, box.y + 10), 12,
+                 C["green"] if on else C["muted"], True)
+            col = C["gold"] if on else C["dim"]
+            if ssid and pw:
+                text(surf, f"Wi-Fi  {ssid}", (box.x + 16, box.y + 28), 20, col, True, max_w=box.w - 160)
+                text(surf, f"Password  {pw}", (box.x + 16, box.y + 53), 20, col, True, max_w=box.w - 160)
+            else:
+                text(surf, "Press 'Start hotspot'", (box.x + 16, box.y + 36), 22, C["dim"], True, max_w=box.w - 160)
+        elif self.s.get("lan_mode"):
             addr = self.invite()
             text(surf, "YOUR ADDRESS – SEND IT TO YOUR FRIEND", (box.x + 16, box.y + 12), 12, C["muted"], True)
             text(surf, addr or "not available", (box.x + 16, box.y + 32), 30, C["gold"] if addr else C["yellow"],
@@ -521,6 +725,9 @@ class FriendsScreen(Screen):
                              else "Open for friends" if fw else
                                                                     "Press 'Open firewall'" if fw is False else
                                                                     "Can't check – press 'Open firewall' once")))
+            if self.s.get("host_kind") == "direct":
+                hs = snap.get("hotspot")
+                rows.insert(0, (True if hs else None, "Hotspot", f"On · {hs[1]}" if hs else "Press 'Start hotspot'"))
             if self.s.get("host_kind") == "internet":
                 rows.append((True if self.s.get("upnp_open") else None, "Router",
                              f"Ports open · {self.s.get('public_ip')}" if self.s.get("upnp_open")
@@ -542,7 +749,7 @@ class FriendsScreen(Screen):
             ui.text_block(surf, msg, (mbox.x + 20, mbox.y + 14), mbox.w - 36, 15, C["text"], spacing=3)
             surf.set_clip(clip)
         else:
-            ui.text_block(surf, "Ask your friend for their address (the gold one on their Friends tab). Create an "
-                          "account on their server once, turn on 'Play on my friend's server', then press PLAY. "
-                          "Your mods stay on your side.",
+            ui.text_block(surf, "Ask your friend for their address (the gold one on their Friends tab), or press "
+                          "Find Deck when they host Deck to Deck. Create an account on their server once, turn on "
+                          "'Play on my friend's server', then press PLAY. Your mods stay on your side.",
                           (mbox.x + 4, mbox.y + 10), mbox.w - 8, 14, C["dim"], spacing=3)

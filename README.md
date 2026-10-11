@@ -97,6 +97,7 @@ One of you **hosts** (runs the server) and the other **joins**. Both need MH Lau
 | Way | Best for | What you need |
 | --- | --- | --- |
 | **Tailscale** (recommended) | Playing over the internet | Both install [Tailscale](https://tailscale.com/download) (built into Bazzite). Press **Set up Tailscale** on the Friends tab: it turns Tailscale on and opens the login page. The host then invites the friend to their tailnet, or shares this machine with them. No router setup. |
+| **Deck to Deck (own Wi-Fi hotspot)** | Two Decks side by side, no router or internet (car, travel, outdoors) | Nothing extra. The host's Deck makes its own Wi-Fi; the other Deck presses **Find Deck**. See [Deck to Deck](#deck-to-deck-no-router). |
 | **Same Wi-Fi / home network** | Same house | Nothing extra |
 | **ZeroTier** | Over the internet, like Tailscale | Both join the same ZeroTier network |
 | **Internet (UPnP)** | No VPN wanted | A router with UPnP turned on, and no CGNAT from your provider (the launcher warns you if there is) |
@@ -111,6 +112,22 @@ One of you **hosts** (runs the server) and the other **joins**. Both need MH Lau
 1. Friends tab → type the host's address in **Friend's address** and press **Test connection**.
 2. Enter an email, player name and password, then press **Create account there**. This makes an account on the host's server.
 3. Turn on **Play on my friend's server** and press **PLAY**. The game logs in to the host's server automatically.
+
+### Deck to Deck (no router)
+
+Two Steam Decks can play together with nothing else: one Deck makes its own Wi-Fi hotspot and the other joins it directly. (The Deck's Wi-Fi can't do the old "ad-hoc" mode, so the launcher uses a hotspot instead; it works the same way and is more reliable.)
+
+**Host Deck:**
+1. Friends tab → *How your friend reaches you* → **Deck to Deck (own Wi-Fi hotspot)**, then turn on **Host for friends** (or press **Start hotspot**).
+2. The box shows the **Wi-Fi name** (`MHL-…`) and an 8-digit **password**. **New password** makes a new one.
+3. Press **PLAY** as usual.
+
+**Joining Deck:**
+1. Friends tab → **Find Deck** → pick your friend's Deck → type the password.
+2. The launcher connects, fills in the address (`10.42.0.1`) and turns on **Play on my friend's server**.
+3. The first time, enter an email, player name and password and press **Create account there**. Then press **PLAY**.
+
+While the hotspot is on (or joined), that Deck's Wi-Fi isn't on your normal network, so there's no internet. The game and server don't need it. Your usual Wi-Fi comes back by itself when you stop hosting, press **Leave Deck**, turn off *Play on my friend's server*, or close the launcher. If the launcher crashed, it switches the Wi-Fi back the next time it starts. Keep the Decks within a few metres for the best connection; the hotspot uses 2.4 GHz for range and works with both the LCD and OLED Deck. It also works on Linux PCs and laptops that use NetworkManager and have Wi-Fi.
 
 **How it works:** the launcher's login bridge answers each player with the address they actually used. The host's own game gets `127.0.0.1`, and the friend gets the LAN, Tailscale or internet address. It does this for SiteConfig.xml and for the login ticket's game-server address, so one server works for everyone without editing any config.
 
