@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.2.1
+- **Fix: launcher was slow** after the Friends tab was added, especially while hosting. Firewall and Tailscale checks (which start `firewall-cmd` / `tailscale`) ran on every screen redraw; they now run in the background every few seconds, and the screen uses the cached result. Redraws went from up to ~1 s to a few milliseconds.
+
 ## v1.2.0
 - **New Friends tab: play with a friend.**
   - **Host for friends** with an address to share, over the same network, **Tailscale**, **ZeroTier** or the **internet** (automatic router port forwarding with UPnP, with a CGNAT warning)

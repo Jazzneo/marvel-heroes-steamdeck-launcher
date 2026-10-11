@@ -492,22 +492,30 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------- server / bridge
-    def host_address(self):
-        """The address friends use to reach this server (None when not hosting)."""
+    def host_address(self, live=False):
+        """The address friends use to reach this server (None when not hosting). The UI reads the cached
+        network snapshot (live=False) so drawing never waits for outside programs."""
         if not self.settings.get("lan_mode"):
             return None
         from . import network
         kind = self.settings.get("host_kind")
+        if live:
+            ts = network.tailscale_ip() if kind == "tailscale" else None
+            zt = network.zerotier_ip() if kind == "zerotier" else None
+            lan = lan_ip()
+        else:
+            snap = network.snapshot()
+            ts, zt, lan = snap["tailscale"], snap["zerotier"], snap["lan"]
         if kind == "tailscale":
-            return network.tailscale_ip() or lan_ip()
+            return ts or lan
         if kind == "zerotier":
-            return network.zerotier_ip() or lan_ip()
+            return zt or lan
         if kind == "internet":
-            return self.settings.get("public_ip") or lan_ip()
-        return lan_ip()
+            return self.settings.get("public_ip") or lan
+        return lan
 
     def server_lan_ip(self):
-        return self.host_address()
+        return self.host_address(live=True)
 
     def start_server_blocking(self, progress, wait_online=True, timeout=300):
         """Worker-thread helper: start bridge + server and optionally wait until online."""

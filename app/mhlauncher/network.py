@@ -48,14 +48,14 @@ def _cgnat(ip):
         return False
 
 
-def tailscale_ip():
+def tailscale_ip(ask_cli=True):
     for name, ip in interfaces():
         if name.startswith("tailscale") or (name.startswith("ts") and _cgnat(ip)):
             return ip
-    if shutil.which("tailscale"):
+    if ask_cli and shutil.which("tailscale"):
         try:
             ip = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True,
-                                timeout=5).stdout.strip().splitlines()
+                                timeout=2).stdout.strip().splitlines()
             if ip and re.match(r"^[\d.]+$", ip[0]):
                 return ip[0]
         except (OSError, subprocess.SubprocessError):
@@ -70,11 +70,10 @@ def zerotier_ip():
     return None
 
 
-def address_options():
-    """[(kind, label, address_or_None, help)] for the Friends tab."""
-    lan = lan_ip()
-    ts = tailscale_ip()
-    zt = zerotier_ip()
+def address_options(snap=None):
+    """[(kind, label, address_or_None, help)] for the Friends tab (from the cached snapshot)."""
+    snap = snap or snapshot()
+    lan, ts, zt = snap["lan"], snap["tailscale"], snap["zerotier"]
     return [
         ("tailscale", f"Tailscale  {ts}" if ts else "Tailscale (not running)", ts,
          "Free virtual network. Both of you install Tailscale and join the same tailnet (share your machine). "
@@ -87,6 +86,54 @@ def address_options():
          "The launcher asks your router to forward ports 80, 443 and 4306. Needs UPnP on the router and no "
          "CGNAT from your provider."),
     ]
+
+
+# ============================================================== cached snapshot
+# Asking firewall-cmd / tailscale means starting programs (100+ ms each). The UI redraws up to 60 times a
+# second, so it only ever reads this snapshot; a background thread refreshes it.
+import threading
+import time as _time
+
+_snap = {"at": 0.0, "lan": "127.0.0.1", "tailscale": None, "zerotier": None,
+         "fw": (None, False), "fw_open": None}
+_snap_lock = threading.Lock()
+_refreshing = threading.Event()
+
+
+def refresh_snapshot():
+    """Full refresh (starts programs; call from a background thread)."""
+    new = {"lan": lan_ip(), "tailscale": tailscale_ip(ask_cli=True), "zerotier": zerotier_ip()}
+    fw = firewall()
+    new["fw"] = fw
+    new["fw_open"] = firewall_ports_open(fw=fw) if fw[1] else True
+    new["at"] = _time.time()
+    with _snap_lock:
+        _snap.update(new)
+    return dict(_snap)
+
+
+def _refresh_bg():
+    try:
+        refresh_snapshot()
+    except Exception as e:
+        print("[network] refresh failed:", e)
+    finally:
+        _refreshing.clear()
+
+
+def snapshot(max_age=15.0):
+    """Cached network facts; never blocks on outside programs. Refreshes in the background when stale."""
+    with _snap_lock:
+        first = _snap["at"] == 0.0
+        if first:   # quick values right away (no programs started)
+            _snap.update(lan=lan_ip(), tailscale=tailscale_ip(ask_cli=False), zerotier=zerotier_ip(),
+                         at=0.001)
+        stale = _time.time() - _snap["at"] > max_age
+        data = dict(_snap)
+    if (first or stale) and not _refreshing.is_set():
+        _refreshing.set()
+        threading.Thread(target=_refresh_bg, daemon=True, name="net-refresh").start()
+    return data
 
 
 # ============================================================== UPnP (router port forwarding)
@@ -229,9 +276,9 @@ def firewall():
     return None, False
 
 
-def firewall_ports_open(ports=FRIEND_PORTS):
+def firewall_ports_open(ports=FRIEND_PORTS, fw=None):
     """True / False when it can tell, None when it can't (querying may need admin rights)."""
-    kind, active = firewall()
+    kind, active = fw or firewall()
     if not active:
         return True
     if kind == "firewalld":
@@ -249,9 +296,9 @@ def firewall_ports_open(ports=FRIEND_PORTS):
     return None
 
 
-def firewall_script(ports=FRIEND_PORTS):
+def firewall_script(ports=FRIEND_PORTS, fw=None):
     """Shell lines (run as root) that let friends through the firewall, or [] if none is active."""
-    kind, active = firewall()
+    kind, active = fw or firewall()
     if not active:
         return []
     if kind == "firewalld":

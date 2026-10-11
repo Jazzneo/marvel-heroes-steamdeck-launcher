@@ -58,14 +58,15 @@ class FriendsScreen(Screen):
         if not self._refresh_lock.acquire(blocking=False):
             return
         try:
-            self.options = network.address_options()
-            self.fw_state = network.firewall_ports_open() if self.s.get("lan_mode") else None
+            snap = network.refresh_snapshot()
+            self.options = network.address_options(snap)
+            self.fw_state = snap["fw_open"] if self.s.get("lan_mode") else None
         finally:
             self._refresh_lock.release()
 
     def kinds(self):
         if not self.options:
-            self.options = network.address_options()
+            self.options = network.address_options(network.snapshot())
         return self.options
 
     def invite(self):
@@ -78,7 +79,7 @@ class FriendsScreen(Screen):
         if on:
             self.s.set("join_mode", False)
             kind = self.s.get("host_kind")
-            if kind == "tailscale" and not network.tailscale_ip():
+            if kind == "tailscale" and not network.snapshot()["tailscale"]:
                 app.dialog("Tailscale isn't running", "Install Tailscale (Bazzite has it built in; on Steam Deck use "
                            "the Tailscale Flatpak or tailscale.com/download), log in, and share this machine with "
                            "your friend. Or pick another way on the Friends tab.")
@@ -111,8 +112,9 @@ class FriendsScreen(Screen):
         """One admin prompt: ports 80/443 for the launcher (if needed) and the firewall for friends."""
         app = self.app
         need_ports = not ports_allowed()
-        fw_lines = network.firewall_script()
-        fw_ok = network.firewall_ports_open() if fw_lines else True
+        snap = network.snapshot()
+        fw_lines = network.firewall_script(fw=snap["fw"])
+        fw_ok = snap["fw_open"] if fw_lines else True
         if not need_ports and (not fw_lines or fw_ok is True):
             if not silent_if_ok:
                 app.toast("Ports and firewall are already open for friends", "ok")
@@ -122,7 +124,7 @@ class FriendsScreen(Screen):
             lines += integration.build_fix_script(True, []).splitlines()[1:-1]
         lines += fw_lines
         lines.append("exit 0")
-        kind, _active = network.firewall()
+        kind, _active = snap["fw"]
         what = []
         if need_ports:
             what.append("open ports 80/443 for the launcher (one time)")
@@ -138,6 +140,7 @@ class FriendsScreen(Screen):
                 ok, info = res
                 if ok:
                     self.fw_state = True
+                    threading.Thread(target=network.refresh_snapshot, daemon=True).start()
                     app.toast("Friends can reach your server now", "ok")
                 else:
                     app.dialog("Couldn't open it automatically", f"{info}\n\nOpen Konsole and run:\n\n" +
@@ -301,8 +304,9 @@ class FriendsScreen(Screen):
             (True if srv_on else None, "Server", "Online" if srv_on else "Turns on when you press PLAY or Server → ON"),
         ]
         if self.s.get("lan_mode"):
-            fw = self.fw_state
-            kind, active = network.firewall()
+            snap = network.snapshot()
+            fw = self.fw_state if self.fw_state is not None else snap["fw_open"]
+            kind, active = snap["fw"]
             rows.append((True if (not active or fw) else (None if fw is None else False), "Firewall",
                          "No firewall active" if not active else ("Open for friends" if fw else
                                                                     "Press 'Open firewall'" if fw is False else
