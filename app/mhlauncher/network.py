@@ -360,3 +360,74 @@ def create_account_on(host, email, player, password, timeout=10):
     except Exception as e:
         return False, f"Can't reach your friend's server: {getattr(e, 'reason', e)}"
     return result == 0, RESULT_TEXT.get(result, f"Unknown error (code {result}).")
+
+
+# ============================================================== Tailscale setup
+def tailscale_installed():
+    return bool(shutil.which("tailscale"))
+
+
+def tailscale_state():
+    """'missing', 'daemon-off', or Tailscale's BackendState ('Running', 'NeedsLogin', 'Stopped', ...)."""
+    import json
+    if not tailscale_installed():
+        return "missing"
+    try:
+        r = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return "daemon-off"
+    try:
+        return json.loads(r.stdout).get("BackendState") or "unknown"
+    except ValueError:
+        err = (r.stderr + r.stdout).lower()
+        if "failed to connect" in err or "connection refused" in err or "no such file" in err \
+                or "tailscaled" in err:
+            return "daemon-off"
+        return "unknown"
+
+
+def tailscale_admin_script(user):
+    """Root lines: start the Tailscale service (and at boot) and let this user control it without sudo."""
+    return ("set -e\nsystemctl enable --now tailscaled\nfor i in 1 2 3 4 5 6 7 8 9 10; do "
+            "tailscale status >/dev/null 2>&1 && break; tailscale status 2>&1 | grep -qi 'logged out\\|needs' "
+            "&& break; sleep 1; done\n"
+            f"tailscale set --operator={user}\nexit 0")
+
+
+def tailscale_login(timeout=30):
+    """Start 'tailscale up' as this user and return (login_url_or_None, output).
+
+    'tailscale up' prints a login URL and then waits until the login is done; it keeps running in the
+    background. Raises PermissionError when this user may not control Tailscale yet."""
+    import threading as _th
+    import time as _t
+    proc = subprocess.Popen(["tailscale", "up"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    lines, found = [], {}
+
+    def reader():
+        for line in proc.stdout:
+            lines.append(line.rstrip())
+            m = re.search(r"https://login\.tailscale\.com/\S+", line)
+            if m:
+                found["url"] = m.group(0)
+    _th.Thread(target=reader, daemon=True).start()
+    deadline = _t.time() + timeout
+    while _t.time() < deadline and "url" not in found and proc.poll() is None:
+        _t.sleep(0.2)
+    out = "\n".join(lines)
+    if proc.poll() not in (None, 0) and ("access denied" in out.lower() or "permission" in out.lower()
+                                         or "operator" in out.lower()):
+        raise PermissionError(out)
+    return found.get("url"), out
+
+
+def open_url(url):
+    for cmd in (["xdg-open", url], ["kde-open", url], ["gio", "open", url]):
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                return True
+            except OSError:
+                continue
+    return False

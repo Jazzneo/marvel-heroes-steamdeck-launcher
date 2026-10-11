@@ -40,6 +40,7 @@ class FriendsScreen(Screen):
         self.join_msg = ("", "info")
         self.status_cache = None
         self._refresh_lock = threading.Lock()
+        self.ts_wait_until = 0          # waiting for a Tailscale login to finish
 
     def badge(self):
         if self.s.get("lan_mode"):
@@ -50,9 +51,14 @@ class FriendsScreen(Screen):
 
     # --------------------------------------------------------------- state
     def update(self):
-        if self.app.screen is self and time.time() - self.options_at > 6 and not self.app.modals:
+        waiting = time.time() < self.ts_wait_until
+        every = 3 if waiting else 6
+        if (self.app.screen is self or waiting) and time.time() - self.options_at > every:
             self.options_at = time.time()
             threading.Thread(target=self._refresh, daemon=True).start()
+        if waiting and network.snapshot(max_age=1e9)["tailscale"]:
+            self.ts_wait_until = 0
+            self.app.toast(f"Tailscale connected: {network.snapshot()['tailscale']}", "ok", 8)
 
     def _refresh(self):
         if not self._refresh_lock.acquire(blocking=False):
@@ -175,6 +181,62 @@ class FriendsScreen(Screen):
         if self.s.get("lan_mode") and kind == "internet" and not self.s.get("upnp_open"):
             self.open_router()
 
+    def setup_tailscale(self):
+        app = self.app
+        if not network.tailscale_installed():
+            app.dialog("Install Tailscale first",
+                       "Tailscale isn't installed on this system. Install it from tailscale.com/download "
+                       "(Bazzite includes it; for SteamOS see tailscale.com/download/linux/steamos), then press "
+                       "Set up Tailscale again. Your friend needs Tailscale too.", width=900)
+            return
+        import getpass
+        user = getpass.getuser()
+
+        def work(p):
+            p(None, "Checking Tailscale…")
+            state = network.tailscale_state()
+            if state == "Running":
+                network.refresh_snapshot()
+                return ("running", None)
+            admin_done = False
+            if state == "daemon-off":
+                p(None, "Turning on Tailscale (password prompt)…")
+                ok, info = integration.run_as_admin(network.tailscale_admin_script(user))
+                if not ok:
+                    raise RuntimeError("Couldn't turn on Tailscale: " + info)
+                admin_done = True
+            p(None, "Starting Tailscale login…")
+            try:
+                url, out = network.tailscale_login()
+            except PermissionError:
+                if admin_done:
+                    raise RuntimeError("Tailscale refused the login even after setup. Run 'sudo tailscale up' once "
+                                       "in a terminal.")
+                p(None, "Allowing the launcher to use Tailscale (password prompt)…")
+                ok, info = integration.run_as_admin(network.tailscale_admin_script(user))
+                if not ok:
+                    raise RuntimeError("Couldn't set up Tailscale: " + info)
+                url, out = network.tailscale_login()
+            return ("login", url)
+
+        def done(res):
+            what, url = res
+            if what == "running":
+                self.options_at = 0
+                app.toast("Tailscale is already running", "ok")
+                return
+            self.ts_wait_until = time.time() + 600
+            if url:
+                opened = network.open_url(url)
+                app.dialog("Log in to Tailscale",
+                           ("A browser window opened. " if opened else "") + "Log in to Tailscale there (free "
+                           f"account), then come back – your address appears here by itself.\n\nLogin page: {url}"
+                           "\n\nThen let your friend in: invite them to your tailnet, or share this machine "
+                           "with them from login.tailscale.com/admin/machines.", width=1000)
+            else:
+                app.toast("Tailscale is starting – your address appears in a moment.", "ok", 6)
+        app.run_task("Setting up Tailscale", work, done)
+
     def copy_invite(self):
         addr = self.invite()
         if not addr:
@@ -247,6 +309,9 @@ class FriendsScreen(Screen):
         cur = self.s.get("host_kind")
         ws.append(ui.Selector("fr_kind", (LX + 20, Y0 + 142, w, 70), "How your friend reaches you",
                               [o[1] for o in opts], kinds.index(cur) if cur in kinds else 0, self.set_kind))
+        if cur == "tailscale" and not network.snapshot()["tailscale"]:
+            ws.append(ui.Button("fr_ts", (LX + 20, Y0 + 220, w, 50), "Set up Tailscale", self.setup_tailscale,
+                                "primary", size=18))
         if host_on:
             ws.append(ui.Button("fr_copy", (LX + COL - 20 - 120, Y0 + 292, 120, 50), "Copy", self.copy_invite,
                                 "secondary", size=18, enabled=bool(self.invite())))
@@ -284,9 +349,11 @@ class FriendsScreen(Screen):
         # host column details
         opts = self.kinds()
         cur = next((o for o in opts if o[0] == self.s.get("host_kind")), opts[0])
+        show_help = not (cur[0] == "tailscale" and not network.snapshot()["tailscale"])
         clip = surf.get_clip()
         surf.set_clip(pygame.Rect(LX, Y0 + 216, COL, 58))
-        ui.text_block(surf, cur[3], (LX + 22, Y0 + 220), COL - 44, 14, C["dim"], spacing=3)
+        if show_help:
+            ui.text_block(surf, cur[3], (LX + 22, Y0 + 220), COL - 44, 14, C["dim"], spacing=3)
         surf.set_clip(clip)
         box = pygame.Rect(LX + 20, Y0 + 276, COL - 40, 82)
         rrect(surf, C["bg2"], box, 14)

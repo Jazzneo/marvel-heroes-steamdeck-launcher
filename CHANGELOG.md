@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.2
+- **Set up Tailscale** button on the Friends tab: turns on the Tailscale service (one password prompt), lets you control it without sudo, opens the login page, and shows your Tailscale address as soon as you're logged in.
+- **Fix: symbols showed as empty boxes** (◀ ▶ ✓ → ⌫ …) on systems whose main font doesn't have them (e.g. Noto Sans on Bazzite). Missing symbols are now drawn with a bundled DejaVu Sans, and the selector arrows are drawn as shapes.
+
 ## v1.2.1
 - **Fix: launcher was slow** after the Friends tab was added, especially while hosting. Firewall and Tailscale checks (which start `firewall-cmd` / `tailscale`) ran on every screen redraw; they now run in the background every few seconds, and the screen uses the cached result. Redraws went from up to ~1 s to a few milliseconds.
 

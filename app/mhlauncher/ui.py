@@ -51,6 +51,97 @@ def font(size, bold=False):
     return f
 
 
+# Fonts with wide symbol coverage, used for characters the main font doesn't have (arrows, check marks,
+# ≡ …): e.g. Noto Sans on Bazzite has no ◀ ▶, which showed up as empty boxes.
+_FALLBACK_NAMES = "dejavusans,notosanssymbols2,notosanssymbols,notosansmath,symbola,freesans,liberationsans"
+_FALLBACK_CACHE = {}
+
+
+def _bundled_font_path(bold):
+    import os
+    base = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "fonts")
+    p = os.path.join(base, "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf")
+    return p if os.path.isfile(p) else None
+
+
+def fallback_font(size, bold=False):
+    """Symbol font: the DejaVu Sans shipped with the launcher (always has the symbols we use), else a system one."""
+    key = (size, bold)
+    f = _FALLBACK_CACHE.get(key)
+    if f is None:
+        path = _bundled_font_path(bold)
+        try:
+            f = pygame.font.Font(path, size) if path else pygame.font.SysFont(_FALLBACK_NAMES, size, bold=bold)
+        except Exception:
+            f = None
+        _FALLBACK_CACHE[key] = f or font(size, bold)
+        f = _FALLBACK_CACHE[key]
+    return f
+
+
+_GLYPH_CACHE = {}
+_NOTDEF = "\U0010FFFD"      # a code point no UI font has: renders as the font's "missing" box
+
+
+def _glyph_missing(f, ch):
+    key = (id(f), ch)
+    v = _GLYPH_CACHE.get(key)
+    if v is None:
+        try:
+            m = f.metrics(ch)[0]
+            if m is None:
+                v = True
+            else:
+                a = f.render(ch, True, (255, 255, 255))
+                b = f.render(_NOTDEF, True, (255, 255, 255))
+                v = a.get_size() == b.get_size() and \
+                    pygame.image.tobytes(a, "RGBA") == pygame.image.tobytes(b, "RGBA")
+        except Exception:
+            v = False
+        _GLYPH_CACHE[key] = v
+    return v
+
+
+def _missing(f, s):
+    """Which characters the font can't draw (ASCII is always fine)."""
+    return [ord(ch) > 127 and _glyph_missing(f, ch) for ch in s]
+
+
+def render(s, size=20, color=None, bold=False):
+    """Render text; characters missing from the main font are drawn with a symbol-capable fallback font."""
+    f = font(size, bold)
+    color = color or C["text"]
+    miss = _missing(f, s)
+    if not any(miss):
+        return f.render(s, True, color)
+    fb = fallback_font(size, bold)
+    runs, cur, cur_fb = [], "", None
+    for ch, m in zip(s, miss):
+        if cur and m != cur_fb:
+            runs.append((cur, cur_fb))
+            cur = ""
+        cur += ch
+        cur_fb = m
+    if cur:
+        runs.append((cur, cur_fb))
+    imgs = [((fb if use_fb else f).render(t, True, color), (fb if use_fb else f)) for t, use_fb in runs]
+    asc = max(ff.get_ascent() for _i, ff in imgs)
+    h = max(asc - ff.get_ascent() + i.get_height() for i, ff in imgs)
+    out = pygame.Surface((sum(i.get_width() for i, _f in imgs), h), pygame.SRCALPHA)
+    x = 0
+    for img, ff in imgs:
+        out.blit(img, (x, asc - ff.get_ascent()))
+        x += img.get_width()
+    return out
+
+
+def text_width(s, size=20, bold=False):
+    f = font(size, bold)
+    if not any(_missing(f, s)):
+        return f.size(s)[0]
+    return render(s, size, None, bold).get_width()
+
+
 def text(surf, s, pos, size=20, color=None, bold=False, anchor="topleft", max_w=None):
     f = font(size, bold)
     s = str(s)
@@ -58,7 +149,7 @@ def text(surf, s, pos, size=20, color=None, bold=False, anchor="topleft", max_w=
         while s and f.size(s + "…")[0] > max_w:
             s = s[:-1]
         s += "…"
-    img = f.render(s, True, color or C["text"])
+    img = render(s, size, color, bold)
     r = img.get_rect(**{anchor: pos})
     surf.blit(img, r)
     return r
@@ -298,8 +389,10 @@ class Selector(Widget):
         text(surf, val, (self.rect.x + 18, self.rect.bottom - 12), 19, C["text"], True, "bottomleft",
              self.rect.w - 90)
         if len(self.options) > 1:
-            text(surf, "◀  ▶", (self.rect.right - 18, self.rect.centery), 16,
-                 C["text"] if focused else C["dim"], False, "midright")
+            col = C["text"] if focused else C["dim"]
+            r, cy = self.rect.right - 18, self.rect.centery
+            pygame.draw.polygon(surf, col, [(r - 34, cy), (r - 23, cy - 7), (r - 23, cy + 7)])   # left arrow
+            pygame.draw.polygon(surf, col, [(r, cy), (r - 11, cy - 7), (r - 11, cy + 7)])        # right arrow
 
     def _move(self, step):
         if self.options and self.enabled:

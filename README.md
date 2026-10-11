@@ -96,7 +96,7 @@ One of you **hosts** (runs the server) and the other **joins**. Both need MH Lau
 
 | Way | Best for | What you need |
 | --- | --- | --- |
-| **Tailscale** (recommended) | Playing over the internet | Both install [Tailscale](https://tailscale.com/download) (built into Bazzite, Flatpak on Steam Deck). The host shares their machine with the friend. No router setup. |
+| **Tailscale** (recommended) | Playing over the internet | Both install [Tailscale](https://tailscale.com/download) (built into Bazzite). Press **Set up Tailscale** on the Friends tab: it turns Tailscale on and opens the login page. The host then invites the friend to their tailnet, or shares this machine with them. No router setup. |
 | **Same Wi-Fi / home network** | Same house | Nothing extra |
 | **ZeroTier** | Over the internet, like Tailscale | Both join the same ZeroTier network |
 | **Internet (UPnP)** | No VPN wanted | A router with UPnP turned on, and no CGNAT from your provider (the launcher warns you if there is) |
@@ -187,5 +187,6 @@ The script downloads a portable CPython build ([python-build-standalone](https:/
 * **MH Launcher** © Jazzneo, licensed under the [GNU GPL v3.0](LICENSE).
 * **[MHServerEmu](https://github.com/Crypto137/MHServerEmu)** by Crypto137 and contributors, licensed under the **AGPL-3.0**. Release packages include an unmodified MHServerEmu build together with its license (`server/LICENSE.txt`); its source code is available at the link above.
 * **[MHO Extended Mod Manager](https://github.com/leeper48/MHO-UPK-Tools)** by leeper48, licensed under the **MIT** license, building on Krisan's MHModManager format. It is not bundled: the Mods tab downloads the official release on request, and runs it unmodified.
+* Bundled fallback font: [DejaVu Sans](https://dejavu-fonts.github.io/) (free license, `assets/fonts/DejaVu-LICENSE.txt`).
 * Bundled runtime: [CPython](https://www.python.org/) (PSF License) via python-build-standalone, and [pygame-ce](https://github.com/pygame-community/pygame-ce) (LGPL-2.1).
 * Marvel Heroes is a trademark of its respective owners. No game files are included.
