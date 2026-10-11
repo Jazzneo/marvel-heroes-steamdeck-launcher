@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.0
+- **Move my heroes (solo ⇄ friend).** Saves live on the server, so your solo heroes and the ones on a friend's server were separate. Now the Friends tab has **Move my heroes**:
+  - **Bring to friend**: copies your solo heroes, items and stash to your account on your friend's server.
+  - **Take home**: copies your heroes from your friend's server back into your solo save.
+  - Shows both saves (heroes and items) before you choose, and asks once more before replacing anything.
+  - A backup of the save that gets replaced is always made first (last 10 kept in `~/.local/share/MHLauncher/save-backups/`, on whichever Deck was changed).
+  - Safe while the host keeps playing: it refuses while you're still in the game on that server (the server saves your heroes when you log out), and when the two servers are different MHServerEmu versions.
+  - Needs your email and password on the friend's server; you can only read or replace your own save there. The transfer uses the encrypted login port, and 5 wrong passwords lock it for 5 minutes.
+  - Both launchers need v1.4.0 or newer.
+
 ## v1.3.0
 - **Deck to Deck: two Steam Decks play together with no router and no internet.** One Deck makes its own Wi-Fi hotspot right from the Friends tab (*How your friend reaches you → Deck to Deck*), and the other Deck presses **Find Deck**, picks it and types the 8-digit password. The address is filled in for you and *Play on my friend's server* switches on.
   - Your usual Wi-Fi comes back by itself when you stop hosting, leave, or close the launcher, and after a crash at the next start.

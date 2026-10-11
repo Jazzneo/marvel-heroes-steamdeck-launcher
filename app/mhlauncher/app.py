@@ -367,6 +367,10 @@ class App:
         self.server = ServerManager(self.settings)
         host, port = self.server.web_endpoint()
         self.bridge = LoginBridge(host, port)
+        from . import savetransfer
+        from .config import DATA_DIR
+        self.bridge.save_api = savetransfer.make_host_api(self.save_db_file, self.bridge,
+                                                          os.path.join(DATA_DIR, "save-backups"))
         self.screenshot_mode = screenshot_mode
         self.modals = []
         self.toasts = []
@@ -521,6 +525,12 @@ class App:
                 hs = snap.get("hotspot")
             return hs[1] if hs else None
         return lan
+
+    def save_db_file(self):
+        """This launcher's MHServerEmu save database (Data/Account.db)."""
+        from . import savetransfer
+        name = str((self.settings.get("server_options") or {}).get("SQLiteDBManager.FileName") or "Account.db")
+        return savetransfer.db_path(self.server.dir, name)
 
     def server_lan_ip(self):
         # hosting must always listen on every interface, even before the Deck-to-Deck hotspot is up

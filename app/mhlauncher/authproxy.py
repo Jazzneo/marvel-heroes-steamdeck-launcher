@@ -7,6 +7,7 @@
 Ports below 1024 need a one-time system change on Linux, see tools/enable-login-ports.sh.
 """
 import http.client
+import json
 import os
 import re
 import socket
@@ -177,6 +178,35 @@ def rewrite_ticket(payload, new_host):
         return payload
 
 
+def login_email(body):
+    """Email address from an AuthServer login request (LoginDataPB field 1), or None."""
+    try:
+        i = 0
+        _mid, i = _read_varint(body, i)
+        n, i = _read_varint(body, i)
+        msg = body[i:i + n]
+        k = 0
+        while k < len(msg):
+            key, k = _read_varint(msg, k)
+            fn, wt = key >> 3, key & 7
+            if wt == 2:
+                ln, k = _read_varint(msg, k)
+                if fn == 1:
+                    return msg[k:k + ln].decode("utf-8").strip().lower()
+                k += ln
+            elif wt == 0:
+                _, k = _read_varint(msg, k)
+            elif wt == 1:
+                k += 8
+            elif wt == 5:
+                k += 4
+            else:
+                return None
+    except (ValueError, IndexError, UnicodeDecodeError):
+        pass
+    return None
+
+
 def is_local_client(ip):
     return ip.startswith("127.") or ip in ("::1", "localhost") or ip.startswith("::ffff:127.")
 
@@ -216,6 +246,8 @@ class _Handler(BaseHTTPRequestHandler):
         low = path.lower()
         ip = self.client_address[0]
         local = is_local_client(ip) or ip in bridge.local_ips
+        if low.startswith("/mhl/save/"):
+            return self._save_api(low[len("/mhl/save/"):], local)
         if not local:
             allowed = any(self.command == m and (low == p or (p.endswith("/") and low.startswith(p)))
                           for m, p in FRIEND_PATHS)
@@ -235,6 +267,10 @@ class _Handler(BaseHTTPRequestHandler):
                 bridge.friend_logins += 1
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
+        if is_auth and body:
+            email = login_email(body)
+            if email:
+                bridge.logins[email] = time.time()
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS}
         headers["Host"] = f"{bridge.web_host}:{bridge.web_port}"
         try:
@@ -257,6 +293,39 @@ class _Handler(BaseHTTPRequestHandler):
         except OSError as e:
             bridge._log(f"forward failed: {e}")
             self._send(502, b"MHServerEmu is not running")
+
+    def _save_api(self, action, local):
+        """Hero transfer between launchers (see savetransfer.py). JSON in, JSON out; needs the account's password."""
+        bridge = self.server.bridge
+        ip = self.client_address[0]
+
+        def reply(code, obj):
+            self._send(code, json.dumps(obj).encode(), "application/json")
+        if self.command != "POST" or bridge.save_api is None:
+            return reply(404, {"error": "Not available"})
+        if not local and not bridge.hosting:
+            return reply(403, {"error": "Your friend isn't hosting right now."})
+        fails = [t for t in bridge.save_fails.get(ip, []) if time.time() - t < 300]
+        if len(fails) >= 5:
+            return reply(429, {"error": "Too many wrong passwords. Wait 5 minutes."})
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 256 * 1024 * 1024:
+            return reply(413, {"error": "Save is too big"})
+        try:
+            data = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return reply(400, {"error": "Bad request"})
+        if not local:
+            bridge.friends_seen[ip] = time.time()
+        try:
+            code, obj = bridge.save_api(action, data)
+        except Exception as e:
+            bridge._log(f"save api {action} failed: {e}")
+            code, obj = 500, {"error": str(e)}
+        if code == 401:
+            bridge.save_fails[ip] = fails + [time.time()]
+        bridge._log(f"{ip} save {action} -> {code}")
+        reply(code, obj)
 
     do_GET = do_POST = do_PUT = do_HEAD = do_DELETE = _handle
 
@@ -288,6 +357,9 @@ class LoginBridge:
         self.local_ips = set()            # this machine's own addresses (not friends)
         self.friend_logins = 0
         self._siteconfigs = {}
+        self.logins = {}                  # email -> time of the last game login through this bridge
+        self.save_api = None              # set by the app: (action, data) -> (http code, dict)
+        self.save_fails = {}
 
     def siteconfig_for(self, host):
         """SiteConfig.xml whose AuthServerAddress is the address this client used to reach us."""

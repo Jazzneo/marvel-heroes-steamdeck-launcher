@@ -7,7 +7,7 @@ import time
 
 import pygame
 
-from . import ui, network, integration, accounts, hotspot
+from . import ui, network, integration, accounts, hotspot, savetransfer
 from .ui import C, text, rrect, panel
 from .app import CONTENT
 from .authproxy import ports_allowed
@@ -487,6 +487,136 @@ class FriendsScreen(Screen):
             self.join_msg = ("Left your friend's hotspot. Your usual Wi-Fi reconnects by itself.", "info")
         self.app.run_task("Leaving Deck", work, done)
 
+    # --------------------------------------------------------------- moving heroes
+    def move_heroes(self):
+        """Copy a whole save (heroes, items, stash) between your solo server and the friend's server."""
+        app = self.app
+        host = (self.s.get("join_host") or "").strip()
+        email, pw = (self.s.get("join_email") or "").strip(), self.s.get("join_password") or ""
+        local = self.s.active_account()
+        if not host or not email or not pw:
+            self.join_msg = ("Fill in your friend's address and your email + password on their server first (make "
+                             "the account with 'Create account there' if you haven't).", "error")
+            return
+        if not local:
+            self.join_msg = ("Pick your solo account on the Accounts tab first.", "error")
+            return
+        if app.game_running:
+            self.join_msg = ("Close the game first – the server saves your heroes when you log out.", "error")
+            return
+
+        def work(p):
+            p(None, "Asking your friend's server…")
+            remote = savetransfer.remote(host, "info", {"email": email, "password": pw})
+            p(None, "Reading your solo save…")
+            mine = None
+            try:
+                conn = savetransfer._connect(app.save_db_file())
+                try:
+                    acc = savetransfer.find_account(conn, local["email"])
+                    if acc is not None:
+                        mine = {"player_name": acc["PlayerName"], "summary": savetransfer.summary(conn, acc["Id"])}
+                finally:
+                    conn.close()
+            except savetransfer.SaveError:
+                pass
+            return remote, mine
+
+        def done(res):
+            remote, mine = res
+            r_name, r_sum = remote["player_name"], remote["summary"]
+            m_name = mine["player_name"] if mine else local.get("player") or local["email"]
+            m_sum = mine["summary"] if mine else None
+            msg = (f"Your solo save – {m_name}: {savetransfer.describe(m_sum)}\n"
+                   f"On your friend's server – {r_name}: {savetransfer.describe(r_sum)}\n\n"
+                   "Moving copies every hero, item and your stash, and replaces the save on the other side "
+                   "(a backup of it is kept). Your names, logins and passwords stay as they are.")
+            buttons = [("Cancel", None, "ghost")]
+            if r_sum.get("played") and mine:
+                buttons.append(("Take home", lambda: self._confirm_move("home", host, email, pw, local, m_name, r_name),
+                                "secondary"))
+            if m_sum and m_sum.get("played"):
+                buttons.append(("Bring to friend", lambda: self._confirm_move("friend", host, email, pw, local, m_name,
+                                                                              r_name), "primary"))
+            if len(buttons) == 1:
+                msg += ("\n\nNothing to move yet: play once on your own server or on your friend's server first." if
+                        mine else "\n\nYour solo account isn't on your own server yet: press PLAY once with your "
+                                  "own server (turn off 'Play on my friend's server').")
+            app.dialog("Move your heroes", msg, buttons, width=1000)
+
+        def fail(e):
+            self.join_msg = (str(e), "error")
+        app.run_task("Move your heroes", lambda p: self._guard(work, p), lambda r: fail(r) if isinstance(
+            r, Exception) else done(r))
+
+    @staticmethod
+    def _guard(fn, p):
+        try:
+            return fn(p)
+        except savetransfer.SaveError as e:
+            return e
+
+    def _confirm_move(self, direction, host, email, pw, local, m_name, r_name):
+        if direction == "friend":
+            title, text_ = "Bring your heroes to your friend?", (
+                f"Your solo heroes ({m_name}) replace the heroes of {r_name} on your friend's server. Their "
+                "server keeps a backup of the old save. Your solo save stays as it is.")
+        else:
+            title, text_ = "Take your heroes home?", (
+                f"Your heroes from your friend's server ({r_name}) replace your solo save ({m_name}). A backup of "
+                "your solo save is kept first. The save on your friend's server stays as it is.")
+        self.app.dialog(title, text_, [("Cancel", None, "ghost"),
+                                       ("Replace", lambda: self._do_move(direction, host, email, pw, local), "danger")],
+                        width=940)
+
+    def _do_move(self, direction, host, email, pw, local):
+        app = self.app
+        from .config import DATA_DIR
+
+        def work(p):
+            if direction == "friend":
+                p(None, "Reading your solo save…")
+                conn = savetransfer._connect(app.save_db_file())
+                try:
+                    acc = savetransfer.find_account(conn, local["email"])
+                    if acc is None:
+                        raise savetransfer.SaveError("Your solo account isn't on your own server yet.")
+                    payload = savetransfer.export_save(conn, acc)
+                finally:
+                    conn.close()
+                p(None, "Sending your heroes to your friend's server…")
+                res = savetransfer.remote(host, "import", {"email": email, "password": pw, "payload": payload},
+                                          timeout=300)
+                return ("friend", res["player_name"], res["summary"])
+            p(None, "Downloading your heroes from your friend's server…")
+            payload = savetransfer.remote(host, "export", {"email": email, "password": pw}, timeout=300)["payload"]
+            p(None, "Saving them into your solo save…")
+            db_file = app.save_db_file()
+            conn = savetransfer._connect(db_file)
+            try:
+                acc = savetransfer.find_account(conn, local["email"])
+                if acc is None:
+                    raise savetransfer.SaveError("Your solo account isn't on your own server yet.")
+                savetransfer.check_payload(conn, payload)
+                savetransfer.backup(db_file, os.path.join(DATA_DIR, "save-backups"), "before-take-home")
+                new = savetransfer.import_save(conn, acc, payload)
+                return ("home", acc["PlayerName"], new)
+            finally:
+                conn.close()
+
+        def done(r):
+            if isinstance(r, Exception):
+                self.join_msg = (f"Nothing was changed: {r}", "error")
+                return
+            where, name, summ = r
+            if where == "friend":
+                self.join_msg = (f"Done! {name} on your friend's server now has your heroes ({savetransfer.describe(summ)})."
+                                 " Press PLAY to play them there.", "ok")
+            else:
+                self.join_msg = (f"Done! Your solo save ({name}) now has your heroes ({savetransfer.describe(summ)}). "
+                                 "Turn off 'Play on my friend's server' and press PLAY to play solo.", "ok")
+        app.run_task("Moving heroes", lambda p: self._guard(work, p), done)
+
     def setup_tailscale(self):
         app = self.app
         if not network.tailscale_installed():
@@ -673,6 +803,8 @@ class FriendsScreen(Screen):
                             size=17))
         ws.append(ui.Button("fr_jcreate", (RX + 20 + bw + 12, Y0 + 378, bw, 56), "Create account there",
                             self.create_remote, "primary", size=17))
+        ws.append(ui.Button("fr_jmove", (RX + 20, Y0 + 446, w, 52), "Move my heroes (solo ⇄ friend)",
+                            self.move_heroes, "ghost", size=17))
         return ws
 
     def draw(self, surf):
@@ -739,7 +871,7 @@ class FriendsScreen(Screen):
             y += 46
         # join column message
         msg, kind = self.join_msg
-        mbox = pygame.Rect(RX + 20, Y0 + 452, COL - 40, CH - 452 - 20)
+        mbox = pygame.Rect(RX + 20, Y0 + 512, COL - 40, CH - 512 - 20)
         if msg:
             col = {"ok": C["green"], "error": C["red"]}.get(kind, C["blue"])
             rrect(surf, C["bg2"], mbox, 14)

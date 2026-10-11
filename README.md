@@ -113,6 +113,16 @@ One of you **hosts** (runs the server) and the other **joins**. Both need MH Lau
 2. Enter an email, player name and password, then press **Create account there**. This makes an account on the host's server.
 3. Turn on **Play on my friend's server** and press **PLAY**. The game logs in to the host's server automatically.
 
+### Your heroes: solo and with friends
+
+Marvel Heroes saves everything on the server, so each server has its own save: your **solo heroes** are on your own Deck, and the heroes you play on a friend's server are saved on **their** Deck. Playing with a friend never changes your solo save, and turning off *Play on my friend's server* takes you straight back to it.
+
+To use the same heroes in both places, press **Move my heroes** on the Friends tab (your friend's server must be on, and you must have quit the game):
+* **Bring to friend**: your solo heroes, items and stash replace your save on your friend's server.
+* **Take home**: your heroes from your friend's server replace your solo save.
+
+It shows both saves before you choose. The save that gets replaced is backed up first (`~/.local/share/MHLauncher/save-backups/` on that Deck, last 10 kept). Both of you need launcher v1.4.0 or newer and the same MHServerEmu version.
+
 ### Deck to Deck (no router)
 
 Two Steam Decks can play together with nothing else: one Deck makes its own Wi-Fi hotspot and the other joins it directly. (The Deck's Wi-Fi can't do the old "ad-hoc" mode, so the launcher uses a hotspot instead; it works the same way and is more reliable.)
