@@ -165,10 +165,6 @@ class PlayScreen(Screen):
                 raise BridgeBlocked("The game would not be able to log in:\n\n• " + "\n• ".join(problems),
                                     integration.find_blocking_web_servers())
             from . import mods as modlib
-            if not skip_mods:
-                offer = self._friend_mods_offer(host, progress)
-                if offer:
-                    return offer
             if self.s.get("mods_dirty") and modlib.is_ready():
                 ms = next(sc for sc in app.screens if sc.name == "mods")
                 ok_m, summary = ms.apply_blocking(progress)

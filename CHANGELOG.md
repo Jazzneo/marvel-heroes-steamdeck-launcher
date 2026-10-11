@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.5.1
+- **Fix: PLAY on your own server showed "name 'skip_mods' is not defined".** The check for a friend's mods was accidentally also added to solo play in v1.5.0. It now only runs when you join a friend.
+
 ## v1.5.0
 - **Cash shop points (G) without commands.** Server tab → **Cash shop points (G)…**: pick any account on your server (yours or a friend's), see its balance, and press **+1,000 / +10,000 / +100,000 G** or **Other amount…** (a minus amount takes Gs away). You can also set how many Gs new accounts start with.
   - Works with the server on or off; the new balance shows up at that player's next login. It won't change the balance of someone who is in the game right now, because the server would overwrite it when they log out.
