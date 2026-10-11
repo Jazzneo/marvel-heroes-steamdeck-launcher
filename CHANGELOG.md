@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.6.0
+- **Add to Steam now looks like the real game.** The shortcut is called **Marvel Heroes Omega** and gets the game's library artwork: tall cover, wide banner, big background, logo and icon.
+  - If Marvel Heroes Omega is in your Steam library, the official artwork comes from Steam's own cache on your Deck. Otherwise the launcher tries Steam's image servers (the game left the store in 2017, so some sizes may be missing). Anything still missing gets MH Launcher artwork.
+  - Pressing it again on an existing shortcut (also one from an older launcher version) just puts the artwork on it.
+  - In Gaming Mode it uses SteamOS's own "add to Steam" and then adds the artwork; with Steam closed it writes the shortcut itself (your `shortcuts.vdf` is backed up first).
+  - The official artwork is never included in the download; it's only copied on your own machine.
+
 ## v1.5.1
 - **Fix: PLAY on your own server showed "name 'skip_mods' is not defined".** The check for a friend's mods was accidentally also added to solo play in v1.5.0. It now only runs when you join a friend.
 

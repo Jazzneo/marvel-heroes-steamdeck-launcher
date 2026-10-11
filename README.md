@@ -62,6 +62,10 @@ It doesn't need Apache. The launcher has its own small "login bridge" that does 
 
 The first PLAY downloads the .NET 8 runtime (about 30 MB, no admin needed) if your system doesn't have .NET 8 or newer. It also creates a Proton prefix, which takes a minute.
 
+### Add to Steam
+
+Settings → **Add to Steam** adds a shortcut called **Marvel Heroes Omega** with the game's library artwork (cover, banner, background, logo, icon). If you own Marvel Heroes Omega on Steam, the official art comes from your own Steam's cache; otherwise the launcher tries Steam's image servers and uses MH Launcher artwork for anything missing. Restart Steam if the pictures don't show right away. Already added it with an older version? Press it again to put the artwork on your existing shortcut.
+
 ## Controls
 
 | Steam Deck / gamepad | Keyboard | Action |

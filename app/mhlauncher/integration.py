@@ -10,13 +10,13 @@ PORT_SCRIPT = os.path.join(BUNDLE_DIR, "tools", "enable-login-ports.sh")
 LAUNCH_SCRIPT = os.path.join(BUNDLE_DIR, "MHLauncher.sh")
 
 
-def write_desktop_file():
+def write_desktop_file(name="MH Launcher", icon=None):
     os.makedirs(os.path.dirname(DESKTOP_FILE), exist_ok=True)
-    icon = os.path.join(ASSETS_DIR, "icon.png")
+    icon = icon or os.path.join(ASSETS_DIR, "icon.png")
     with open(DESKTOP_FILE, "w", encoding="utf-8") as f:
         f.write("[Desktop Entry]\n"
                 "Type=Application\n"
-                "Name=MH Launcher\n"
+                f"Name={name}\n"
                 "Comment=Marvel Heroes launcher for MHServerEmu\n"
                 f"Exec=\"{LAUNCH_SCRIPT}\"\n"
                 f"Path={BUNDLE_DIR}\n"
@@ -27,21 +27,74 @@ def write_desktop_file():
     return DESKTOP_FILE
 
 
-def add_to_steam():
-    """Returns (ok, message)."""
-    desktop = write_desktop_file()
+def add_to_steam(progress=None):
+    """Add the launcher to Steam as "Marvel Heroes Omega" with the game's library artwork.
+    Blocking (run in a worker). Returns (ok, message)."""
+    from . import steamlib
+    p = progress or (lambda *_a: None)
+    p(None, "Getting the Marvel Heroes Omega artwork…")
+    art = steamlib.collect_art(p)
+    icon = steamlib.icon_file(art)
+    name = steamlib.GAME_NAME
+    write_desktop_file(name, icon)
+    users = steamlib.user_dirs()
+    running = steamlib.steam_running()
+
+    def art_note():
+        srcs = {k: v[1] for k, v in art.items()}
+        official = sorted(k for k, v in srcs.items() if v in ("steam", "web"))
+        if len(official) >= 4:
+            return "with the Marvel Heroes Omega artwork"
+        if official:
+            return ("with the Marvel Heroes Omega artwork (" + ", ".join(official) +
+                    ") and MH Launcher art for the rest")
+        return ("with MH Launcher artwork (the Marvel Heroes Omega art wasn't found – it's there when the game is in "
+                "your Steam library)")
+
+    # 1. already in Steam: just (re)apply the artwork
+    done = []
+    for u in users:
+        key, e = steamlib.find_shortcut(u, LAUNCH_SCRIPT)
+        if e is not None:
+            steamlib.install_grid(u, steamlib._get(e, "appid", 0), art)
+            if not running:
+                steamlib.update_shortcut_vdf(u, key, name=name, icon=icon)
+            done.append(steamlib._get(e, "AppName", name))
+    if done:
+        if running:
+            return True, (f"Updated your '{done[0]}' shortcut {art_note()}. Restart Steam to see it. To rename it, "
+                          f"open its Properties in Steam (or close Steam and press Add to Steam again).")
+        return True, f"Updated your '{name}' shortcut {art_note()}. Start Steam to see it."
+
+    # 2. Steam is running: let Steam add it (SteamOS / Bazzite tool), then put the artwork on it
     tool = shutil.which("steamos-add-to-steam")
-    if tool:
+    if running and tool:
+        p(None, "Adding it to Steam…")
         try:
-            subprocess.Popen([tool, desktop], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            subprocess.Popen([tool, DESKTOP_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
-            return True, ("Sent to Steam. Find 'MH Launcher' in your Library under Non-Steam "
-                          "(Steam must be running).")
         except OSError as e:
             return False, f"steamos-add-to-steam failed: {e}"
-    return False, ("Created a menu entry. To add it to Steam: open Steam → Games → "
-                   "'Add a Non-Steam Game to My Library…' → pick 'MH Launcher' "
-                   f"(or browse to {LAUNCH_SCRIPT}).")
+        p(None, "Waiting for Steam…")
+        u, key, e = steamlib.wait_for_shortcut(LAUNCH_SCRIPT, timeout=30)
+        if e is None:
+            return True, ("Sent to Steam. When 'Marvel Heroes Omega' shows up in your library, press Add to Steam "
+                          "once more to put the artwork on it.")
+        steamlib.install_grid(u, steamlib._get(e, "appid", 0), art)
+        return True, (f"Added '{name}' to Steam {art_note()}. If the pictures don't show yet, restart Steam.")
+
+    # 3. Steam is closed: write the shortcut ourselves (a backup of shortcuts.vdf is kept)
+    if not running and users:
+        for u in users:
+            appid = steamlib.add_shortcut_vdf(u, LAUNCH_SCRIPT, name, icon, BUNDLE_DIR)
+            steamlib.install_grid(u, appid, art)
+        return True, f"Added '{name}' to Steam {art_note()}. Start Steam and find it in your library."
+
+    if running:
+        return False, ("Close Steam completely (Steam menu → Exit), then press Add to Steam again – the launcher adds "
+                       "the shortcut with its artwork while Steam is closed.")
+    return False, ("Steam wasn't found. Install Steam and log in once, or add it by hand: Steam → Games → "
+                   f"'Add a Non-Steam Game to My Library…' → browse to {LAUNCH_SCRIPT}.")
 
 
 # Web servers that commonly grab ports 80/443 and block the login bridge

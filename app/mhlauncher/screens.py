@@ -890,11 +890,10 @@ class SettingsScreen(Screen):
                         (".zip",), picked)
 
     def add_steam(self):
-        ok, msg = integration.add_to_steam()
-        if ok:
-            self.app.toast(msg, "ok", 8)
-        else:
-            self.app.dialog("Add to Steam", msg, width=900)
+        def done(res):
+            ok, msg = res
+            self.app.dialog("Added to Steam" if ok else "Add to Steam", msg, width=900)
+        self.app.run_task("Add to Steam", integration.add_to_steam, done)
 
     def build(self):
         ws = []
