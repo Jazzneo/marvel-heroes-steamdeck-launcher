@@ -123,6 +123,8 @@ class PlayScreen(Screen):
             app.go("client")
             app.toast(ci["problems"][0] if ci else "First, pick your Marvel Heroes game.", "warn")
             return
+        if self.s.get("join_mode"):
+            return self._join_go()
         acc = self.s.active_account()
         if self.s.get("auto_login") and (not acc or not acc.get("password")):
             app.go("accounts")
@@ -182,12 +184,50 @@ class PlayScreen(Screen):
                 self.launch_client()
         app.run_task("Getting ready to play", work, done, show_log=True, cancellable=True)
 
-    def launch_client(self):
+    def _join_go(self):
+        """PLAY in join mode: no local server, connect to a friend's server."""
+        app = self.app
+        host = (self.s.get("join_host") or "").strip()
+        if not host:
+            app.go("friends")
+            app.toast("Enter your friend's address on the Friends tab first.", "warn")
+            return
+        if self.s.get("auto_login") and not (self.s.get("join_email") and self.s.get("join_password")):
+            app.go("friends")
+            app.toast("Enter the email and password of your account on your friend's server.", "warn")
+            return
+        from . import network
+
+        def work(progress):
+            progress(None, f"Connecting to {host}…")
+            problems = network.check_host(host)
+            if problems:
+                raise RuntimeError("Can't reach your friend's server:\n\n• " + "\n• ".join(problems) +
+                                   "\n\nCheck that their server is on and hosting, that the address is right, "
+                                   "and (Tailscale/ZeroTier) that both of you are connected.")
+            from . import mods as modlib
+            if self.s.get("mods_dirty") and modlib.is_ready():
+                ms = next(sc for sc in app.screens if sc.name == "mods")
+                ok_m, summary = ms.apply_blocking(progress)
+                if not ok_m:
+                    raise RuntimeError("Your mod changes couldn't be applied:\n\n" + summary)
+            progress(None, "Launching Marvel Heroes…")
+            return True
+
+        def done(ok):
+            if ok:
+                self.launch_client(siteconfig=f"{host}/SiteConfig.xml",
+                                   account={"email": self.s.get("join_email"),
+                                            "password": self.s.get("join_password")})
+        app.run_task(f"Joining {host}", work, done, cancellable=True)
+
+    def launch_client(self, siteconfig=None, account=None):
         app = self.app
         ci = self.client_info()
         runners = client.detect_runners()
         runner = client.pick_runner(runners, self.s.get("runner"))
-        args = client.build_args(self.s, app.bridge.siteconfig_url(), self.s.active_account())
+        args = client.build_args(self.s, siteconfig or app.bridge.siteconfig_url(),
+                                 account if account is not None else self.s.active_account())
         os.makedirs(LOG_DIR, exist_ok=True)
         try:
             app.game_proc = client.launch(self.s, runner, ci["exe"], args, os.path.join(LOG_DIR, "client.log"))
@@ -246,7 +286,13 @@ class PlayScreen(Screen):
         text(surf, "Offline / private server  ·  client 1.52.0.1700  ·  MHServerEmu",
              (hero.x + 38, hero.y + 96), 17, C["muted"])
         acc = self.s.active_account()
-        if acc:
+        if self.s.get("join_mode"):
+            text(surf, "Joining your friend's server", (hero.x + 38, hero.y + 146), 15, C["muted"])
+            text(surf, self.s.get("join_host") or "(no address yet)", (hero.x + 38, hero.y + 166), 26,
+                 C["blue"], True, max_w=hero.w - 440)
+            text(surf, self.s.get("join_email") or "", (hero.x + 38, hero.y + 200), 15, C["dim"],
+                 max_w=hero.w - 440)
+        elif acc:
             text(surf, "Playing as", (hero.x + 38, hero.y + 146), 15, C["muted"])
             text(surf, acc.get("player") or acc["email"], (hero.x + 38, hero.y + 166), 26, C["gold"], True,
                  max_w=hero.w - 440)
@@ -542,8 +588,8 @@ class ServerScreen(Screen):
             ws.append(ui.Toggle(f"opt_{full}", (tx, y, 380, 56), label, val,
                                 lambda v, full=full: self._set_opt(full, v)))
             y += 62
-        ws.append(ui.Toggle("opt_lan", (tx, y, 380, 56), "Allow LAN players", bool(self.s.get("lan_mode")),
-                            self._set_lan))
+        ws.append(ui.Toggle("opt_lan", (tx, y, 380, 56), "Host for friends (Friends tab)",
+                            bool(self.s.get("lan_mode")), self._set_lan))
         return ws
 
     def _set_opt(self, full, v):
@@ -552,12 +598,7 @@ class ServerScreen(Screen):
             self.app.toast("Saved. Restart the server to apply.", "info")
 
     def _set_lan(self, v):
-        self.s.set("lan_mode", v)
-        if v:
-            self.app.toast(f"Other PCs connect with -siteconfigurl={lan_ip()}/SiteConfig.xml "
-                           "(after a server restart).", "info", 9)
-        elif self.app.server.running:
-            self.app.toast("Restart the server to apply.", "info")
+        next(sc for sc in self.app.screens if sc.name == "friends").set_hosting(v)
 
     def draw(self, surf):
         app, srv, br = self.app, self.app.server, self.app.bridge
@@ -570,7 +611,8 @@ class ServerScreen(Screen):
             ("Login bridge", ("Running" + (f" · {br.auth_requests} logins" if br.auth_requests else ""))
              if br.running else (br.error or "Off")),
             ("Login ports", "Ready" if ports_allowed() else "Need one-time setup (Settings)"),
-            ("Address", (lan_ip() if self.s.get("lan_mode") else "127.0.0.1") + " : 4306"),
+            ("Friends", (f"hosting on {app.host_address()} · {len(br.friends_online())} connected")
+             if self.s.get("lan_mode") else "not hosting (Friends tab)"),
         ]
         for i, (k, v) in enumerate(rows):
             cx = info.x + 24 + (i % 2) * (info.w // 2)

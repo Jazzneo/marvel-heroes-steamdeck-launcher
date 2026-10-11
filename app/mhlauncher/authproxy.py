@@ -100,6 +100,87 @@ def build_siteconfig(auth_address):
     return xml.encode("utf-8")
 
 
+# ------------------------------------------------------------------ per-client addresses
+HOST_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}$")
+# What a friend (a non-local client) may reach through the bridge. Everything else (dashboard, admin web API,
+# metrics) stays local-only.
+FRIEND_PATHS = (("GET", "/siteconfig.xml"), ("HEAD", "/siteconfig.xml"), ("POST", "/authserver/"),
+                ("GET", "/serverstatus"))
+FRIEND_REGISTER = ("POST", "/accountmanagement/create")
+
+
+def _read_varint(data, i):
+    shift = result = 0
+    while True:
+        if i >= len(data) or shift > 63:
+            raise ValueError("bad varint")
+        b = data[i]
+        i += 1
+        result |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return result, i
+        shift += 7
+
+
+def _varint(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def rewrite_ticket(payload, new_host):
+    """Set AuthTicket.frontendServer (field 5) in an MHServerEmu auth response to new_host.
+
+    The response is <varint message id><varint length><AuthTicket protobuf>. The game client connects to
+    frontendServer next, so each client gets the address it reached us through (localhost for the host's
+    own game, the LAN / Tailscale / public address for a friend). Anything unexpected is passed through."""
+    try:
+        mid, i = _read_varint(payload, 0)
+        ln, j = _read_varint(payload, i)
+        msg = payload[j:j + ln]
+        if j + ln != len(payload):
+            return payload
+        out, k, found = bytearray(), 0, False
+        while k < len(msg):
+            start = k
+            key, k = _read_varint(msg, k)
+            fn, wt = key >> 3, key & 7
+            if wt == 0:
+                _, k = _read_varint(msg, k)
+            elif wt == 1:
+                k += 8
+            elif wt == 5:
+                k += 4
+            elif wt == 2:
+                n, k2 = _read_varint(msg, k)
+                k = k2 + n
+                if fn == 5:
+                    host = new_host.encode("ascii")
+                    out += _varint(key) + _varint(len(host)) + host
+                    found = True
+                    continue
+            else:
+                return payload
+            if k > len(msg):
+                return payload
+            out += msg[start:k]
+        if not found:
+            return payload
+        return _varint(mid) + _varint(len(out)) + bytes(out)
+    except (ValueError, UnicodeEncodeError):
+        return payload
+
+
+def is_local_client(ip):
+    return ip.startswith("127.") or ip in ("::1", "localhost") or ip.startswith("::ffff:127.")
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "MHLauncher"
     protocol_version = "HTTP/1.1"
@@ -115,15 +196,43 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _request_host(self):
+        """The address this client used to reach us (Host header), which is reachable for it."""
+        host = (self.headers.get("Host") or "").strip()
+        if host.startswith("["):                      # [ipv6]:port
+            host = host[1:host.find("]")] if "]" in host else ""
+        elif host.count(":") == 1:
+            host = host.split(":", 1)[0]
+        if not host or not HOST_RE.match(host):
+            try:
+                host = self.connection.getsockname()[0]
+            except OSError:
+                host = self.server.bridge.auth_address
+        return host
+
     def _handle(self):
         bridge = self.server.bridge
         path = self.path.split("?", 1)[0]
-        if path.lower().endswith("/siteconfig.xml"):
+        low = path.lower()
+        ip = self.client_address[0]
+        local = is_local_client(ip) or ip in bridge.local_ips
+        if not local:
+            allowed = any(self.command == m and (low == p or (p.endswith("/") and low.startswith(p)))
+                          for m, p in FRIEND_PATHS)
+            if not allowed and bridge.allow_register and (self.command, low) == FRIEND_REGISTER:
+                allowed = True
+            if not allowed:
+                return self._send(403, b"Not available to remote players")
+            bridge.friends_seen[ip] = time.time()
+        if low.endswith("/siteconfig.xml"):
             bridge.siteconfig_requests += 1
-            return self._send(200, bridge.siteconfig, "text/xml")
-        if path.lower().startswith("/authserver"):
+            return self._send(200, bridge.siteconfig_for(self._request_host()), "text/xml")
+        is_auth = low.startswith("/authserver")
+        if is_auth:
             bridge.auth_requests += 1
             bridge.last_auth_time = time.time()
+            if not local:
+                bridge.friend_logins += 1
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS}
@@ -134,6 +243,8 @@ class _Handler(BaseHTTPRequestHandler):
             conn.request(self.command, self.path, body=body, headers=headers)
             resp = conn.getresponse()
             data = resp.read()
+            if is_auth and resp.status == 200 and data:
+                data = rewrite_ticket(data, self._request_host())
             self.send_response(resp.status, resp.reason)
             for k, v in resp.getheaders():
                 if k.lower() not in HOP_HEADERS:
@@ -171,6 +282,26 @@ class LoginBridge:
         self.siteconfig = b""
         self.auth_address = "127.0.0.1"
         self.log_lines = []
+        self.hosting = False
+        self.allow_register = True        # friends may create an account on this server
+        self.friends_seen = {}            # friend ip -> last request time
+        self.local_ips = set()            # this machine's own addresses (not friends)
+        self.friend_logins = 0
+        self._siteconfigs = {}
+
+    def siteconfig_for(self, host):
+        """SiteConfig.xml whose AuthServerAddress is the address this client used to reach us."""
+        if not HOST_RE.match(host or ""):
+            host = self.auth_address
+        if host not in self._siteconfigs:
+            if len(self._siteconfigs) > 32:
+                self._siteconfigs.clear()
+            self._siteconfigs[host] = build_siteconfig(host)
+        return self._siteconfigs[host]
+
+    def friends_online(self, window=120):
+        now = time.time()
+        return [ip for ip, t in self.friends_seen.items() if now - t < window]
 
     def _log(self, line):
         self.log_lines.append(line)
@@ -181,12 +312,12 @@ class LoginBridge:
         return self.https is not None
 
     def siteconfig_url(self):
-        """Value for the client's -siteconfigurl= option.
+        """Value for the client's -siteconfigurl= option (this machine's own game).
 
         The client expects 'host/SiteConfig.xml' (no 'http://', port 80), exactly like the
         official MHServerEmu Setup tool and Bifrost launcher use.
         """
-        host = self.auth_address
+        host = "127.0.0.1"
         if self.http_port in (None, HTTP_PORT):
             return f"{host}/SiteConfig.xml"
         return f"{host}:{self.http_port}/SiteConfig.xml"
@@ -227,12 +358,21 @@ class LoginBridge:
                 problems.append(f"The login bridge on port 443 does not answer ({e}).")
         return problems
 
-    def start(self, lan=False):
+    def start(self, lan=False, allow_register=True):
+        """lan=True: host mode, reachable from other devices (friends)."""
         self.stop()
         self.error = ""
+        self.hosting = bool(lan)
+        self.allow_register = allow_register
         bind = "0.0.0.0" if lan else "127.0.0.1"
         self.auth_address = lan_ip() if lan else "127.0.0.1"
         self.siteconfig = build_siteconfig(self.auth_address)
+        self._siteconfigs = {}
+        try:
+            from .network import interfaces
+            self.local_ips = {ip for _n, ip in interfaces()}
+        except Exception:
+            self.local_ips = set()
 
         # HTTP for SiteConfig.xml
         for port in (HTTP_PORT, HTTP_FALLBACK_PORT):

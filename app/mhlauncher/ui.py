@@ -454,7 +454,7 @@ def _score(cur, cand, d):
         gap = max(0, max(cand.left - cur.right, cur.left - cand.right))
     if not ok or primary <= 0:
         return None
-    return primary + gap * 3
+    return primary + gap * 8
 
 
 def spatial_next(widgets, current, d):

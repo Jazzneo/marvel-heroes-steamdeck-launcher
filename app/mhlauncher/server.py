@@ -379,8 +379,10 @@ class ServerManager:
         values = dict(self.settings.get("server_options") or {})
         # the launcher needs the web API for account creation and status
         values["WebFrontend.EnableWebApi"] = "true"
+        # Hosting: the game frontend listens on every interface so friends can connect; otherwise local only.
+        # (The launcher's login bridge tells each player which address to use, so PublicAddress is a fallback.)
         values["Frontend.PublicAddress"] = lan_ip or "127.0.0.1"
-        values["Frontend.BindIP"] = "0.0.0.0"
+        values["Frontend.BindIP"] = "0.0.0.0" if lan_ip else "127.0.0.1"
         values.update(getattr(self, "port_overrides", {}) or {})
         # file logging helps when something goes wrong in Gaming Mode
         for full, val in values.items():

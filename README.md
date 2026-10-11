@@ -11,6 +11,7 @@ MH Launcher is an all-in-one launcher for **MHServerEmu**, the Marvel Heroes pri
 * **Create accounts** (and optionally give them admin rights) without touching a console or a website.
 * **Pick your Marvel Heroes EXE**, or let the launcher search for it. It checks that the client is version 1.52.0.1700 and copies the game data the server needs.
 * Run the Windows game through **Proton** (Valve's Proton, Proton Experimental, GE-Proton, or `umu-run`) or **Wine**.
+* **Play with a friend:** host your server for friends, or join theirs. It works on the same network, over Tailscale/ZeroTier, or over the internet with automatic router port forwarding (UPnP).
 * **Install mods** (costumes, icons, text, sound packs) from a controller-friendly **Mods** tab, powered by [MHO Extended Mod Manager](https://github.com/leeper48/MHO-UPK-Tools).
 * Play **with a controller** on Steam Deck. Navigation, an on-screen keyboard, a file browser and Gaming Mode support are all built in.
 
@@ -22,9 +23,9 @@ It doesn't need Apache. The launcher has its own small "login bridge" that does 
 
 ![Play screen](docs/screenshots/play.png)
 
-| Mods | Install a mod |
-| --- | --- |
-| ![Mods](docs/screenshots/mods.png) | ![Install a mod](docs/screenshots/mods-install.png) |
+| Friends | Mods | Install a mod |
+| --- | --- | --- |
+| ![Friends](docs/screenshots/friends.png) | ![Mods](docs/screenshots/mods.png) | ![Install a mod](docs/screenshots/mods-install.png) |
 
 | Accounts | Server | Game client |
 | --- | --- | --- |
@@ -81,10 +82,39 @@ The touchscreen and trackpads work too. Text fields open a controller-friendly k
 
 * **Play** – the big PLAY button, server/account/client status, and a "ready check" with Fix buttons.
 * **Accounts** – saved accounts (choose the active one, Y to remove), Sign in, Create account.
+* **Friends** – **Host for friends** (your address to share, firewall/router helpers, friends online) and **Join** (your friend's address, create an account on their server, test the connection, play on their server). See [Playing with friends](#playing-with-friends).
 * **Mods** – your mod list: **A** turns a mod on/off, move mods higher/lower (the higher mod wins when two change the same file), **Install mod…** (newest downloads first, or Browse), **Apply changes**, **Remove**, and **Full Mod Manager** for the editor and Nexus features. See [Mods](#mods) below.
 * **Server** – ON/OFF, live log, a console command box (e.g. `!commands`, `!account userlevel me@deck.local 2`), and options written to `ConfigOverride.ini`: unlock all heroes/team-ups, free-for-all loot, free movement powers, preload data, allow other client versions, allow LAN players.
 * **Game Client** – client path and version, which Proton/Wine to use (or a custom command with `{exe}` and `{args}`), auto-login, 1280×800 resolution, skip intro movies, extra launch options.
 * **Settings** – install .NET, port status, import a newer server zip (your accounts are kept), Add to Steam, launcher behaviour.
+
+## Playing with friends
+
+One of you **hosts** (runs the server) and the other **joins**. Both need MH Launcher and their own copy of the game.
+
+**Choosing how your friend reaches you** (Friends tab → *How your friend reaches you*):
+
+| Way | Best for | What you need |
+| --- | --- | --- |
+| **Tailscale** (recommended) | Playing over the internet | Both install [Tailscale](https://tailscale.com/download) (built into Bazzite, Flatpak on Steam Deck). The host shares their machine with the friend. No router setup. |
+| **Same Wi-Fi / home network** | Same house | Nothing extra |
+| **ZeroTier** | Over the internet, like Tailscale | Both join the same ZeroTier network |
+| **Internet (UPnP)** | No VPN wanted | A router with UPnP turned on, and no CGNAT from your provider (the launcher warns you if there is) |
+
+**Host:**
+1. Friends tab → turn on **Host for friends** and pick how your friend reaches you.
+2. If asked, press **Open it**. One password prompt lets ports 80, 443 and 4306 through your firewall (firewalld/ufw) and does the one-time port setup.
+3. Send your friend the **gold address**. **Copy** puts it on the clipboard.
+4. Press **PLAY** as usual. Your server runs and your friend can join while it's on.
+
+**Friend (joining):**
+1. Friends tab → type the host's address in **Friend's address** and press **Test connection**.
+2. Enter an email, player name and password, then press **Create account there**. This makes an account on the host's server.
+3. Turn on **Play on my friend's server** and press **PLAY**. The game logs in to the host's server automatically.
+
+**How it works:** the launcher's login bridge answers each player with the address they actually used. The host's own game gets `127.0.0.1`, and the friend gets the LAN, Tailscale or internet address. It does this for SiteConfig.xml and for the login ticket's game-server address, so one server works for everyone without editing any config.
+
+**Security:** friends can only reach the login, SiteConfig, server status and (if you allow it) account creation. The dashboard and the admin web API stay local. Turn off **Friends can create accounts** to stop new sign-ups. Router ports opened with UPnP are closed again when you stop hosting.
 
 ## Mods
 
@@ -123,6 +153,7 @@ Back up `Account.db` before big server updates. To update the server, download a
 * **The server stops right after starting**: open the Server tab log. The most common cause is game data missing from the client (`Calligraphy.sip`, `mu_cdata.sip`). Re-pick the client so they get copied again.
 * **Login fails in game**: check the account on the Accounts tab (Sign in checks the password against the server), and confirm that the "Login bridge" on the Server tab shows *Running*.
 * **Playing with friends on your network**: turn on **Allow LAN players** and restart the server. Friends launch the game with `-robocopy -nosteam -siteconfigurl=YOUR-IP/SiteConfig.xml` (no `http://`), and ports 80, 443 and 4306 must not be blocked by a firewall.
+* **Friend can't connect**: on the Friends tab, the friend presses **Test connection**. Check that the host is hosting and their server is on, that both are connected to Tailscale/ZeroTier (if used), and that the host pressed **Open firewall**. With *Internet (UPnP)*, CGNAT from the provider makes hosting impossible; use Tailscale instead.
 * **A mod doesn't install or apply**: the Mod Manager's full output is in `~/.local/share/MHLauncher/logs/modmanager.log`. It refuses to change files while the game runs, and it leaves alone any game file that another tool changed (it lists those). If the Mods setup fails, start the game once (so Proton creates its prefix) and try again.
 * The server's web dashboard is at http://localhost:8080/Dashboard/ while the server is running. If another program (on Steam Deck usually Steam's own `steamwebhelper`) already uses 8080, the launcher moves the server to the next free port (8580, 8680, …) and says so in the server log.
 

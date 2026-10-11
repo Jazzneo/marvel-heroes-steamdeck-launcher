@@ -386,8 +386,10 @@ class App:
 
         from . import screens
         from .modscreen import ModsScreen
-        self.screens = [screens.PlayScreen(self), screens.AccountsScreen(self), ModsScreen(self),
-                        screens.ServerScreen(self), screens.ClientScreen(self), screens.SettingsScreen(self)]
+        from .friendscreen import FriendsScreen
+        self.screens = [screens.PlayScreen(self), screens.AccountsScreen(self), FriendsScreen(self),
+                        ModsScreen(self), screens.ServerScreen(self), screens.ClientScreen(self),
+                        screens.SettingsScreen(self)]
         self.screen_i = 0
         # first run: install the server that ships with the launcher
         try:
@@ -490,8 +492,22 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------- server / bridge
+    def host_address(self):
+        """The address friends use to reach this server (None when not hosting)."""
+        if not self.settings.get("lan_mode"):
+            return None
+        from . import network
+        kind = self.settings.get("host_kind")
+        if kind == "tailscale":
+            return network.tailscale_ip() or lan_ip()
+        if kind == "zerotier":
+            return network.zerotier_ip() or lan_ip()
+        if kind == "internet":
+            return self.settings.get("public_ip") or lan_ip()
+        return lan_ip()
+
     def server_lan_ip(self):
-        return lan_ip() if self.settings.get("lan_mode") else None
+        return self.host_address()
 
     def start_server_blocking(self, progress, wait_online=True, timeout=300):
         """Worker-thread helper: start bridge + server and optionally wait until online."""
@@ -503,8 +519,10 @@ class App:
         if client_root and not self.server.game_data_ok():
             progress(None, "Copying game data from your client…")
             self.server.sync_game_data(client_root)
-        if not self.bridge.running or self.bridge.http_port != 80:
-            self.bridge.start(lan=self.settings.get("lan_mode"))
+        if not self.bridge.running or self.bridge.http_port != 80 or \
+                self.bridge.hosting != bool(self.settings.get("lan_mode")):
+            self.bridge.start(lan=self.settings.get("lan_mode"),
+                              allow_register=self.settings.get("friends_can_register"))
         if not self.server.running:
             progress(None, "Starting MHServerEmu…")
             if not self.server.start(self.server_lan_ip()):

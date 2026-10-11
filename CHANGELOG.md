@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.0
+- **New Friends tab: play with a friend.**
+  - **Host for friends** with an address to share, over the same network, **Tailscale**, **ZeroTier** or the **internet** (automatic router port forwarding with UPnP, with a CGNAT warning)
+  - **Join** a friend: test the connection, create your account on their server, and PLAY logs you in to their server
+  - The login bridge gives each player the right address (SiteConfig and the login ticket's game-server address), so the host and friends use the same server without any config editing
+  - One password prompt opens the firewall (firewalld / ufw) for friends
+  - Friends can only reach the login, server status and (optional) account creation; the dashboard and admin API stay local
+- The game frontend now only listens on the network while hosting (local only otherwise)
+- Better controller navigation in two-column screens
+
 ## v1.1.1
 - **Mods setup fix:** the Windows .NET 8 runtime for MHO Extended Mod Manager is now set up completely (the base .NET Runtime and the Windows Desktop Runtime), with Microsoft's installer as a fallback. Every setup step is logged in `logs/modmanager.log`.
 

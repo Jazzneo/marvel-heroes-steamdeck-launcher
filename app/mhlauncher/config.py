@@ -4,7 +4,7 @@ import os
 import threading
 
 APP_NAME = "MHLauncher"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.0"
 
 # Folder that contains MHLauncher.sh (two levels above this file: app/mhlauncher/config.py)
 BUNDLE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -36,7 +36,16 @@ DEFAULTS = {
     "deck_resolution": True,    # -ResX=1280 -ResY=800
     "skip_movies": True,        # -nostartupmovies
     "extra_client_args": "",
-    "lan_mode": False,          # let other PCs on the network join
+    "lan_mode": False,          # host mode: friends can join this server (Friends tab)
+    "host_kind": "tailscale",   # how friends reach you: tailscale / lan / zerotier / internet
+    "public_ip": "",            # internet hosting: router's public address (UPnP)
+    "upnp_open": False,         # router ports opened by the launcher
+    "friends_can_register": True,
+    "join_mode": False,         # PLAY joins a friend's server instead of your own
+    "join_host": "",
+    "join_email": "",
+    "join_player": "",
+    "join_password": "",
     "server_options": {},       # ConfigOverride.ini values {"Section.Key": "value"}
     "fullscreen": None,         # None = auto (fullscreen in Gaming Mode)
     "mods_dirty": False,        # mod list changed since the last Apply
