@@ -215,7 +215,7 @@ class PlayScreen(Screen):
             self._join_go(skip_mods=True)
         from . import mods as modlib
         msg_size = f" ({modlib.size_text(offer['total'])} to copy" + (
-            ", it can take a while)." if offer["total"] > modlib_share_limit() else ").") if offer["total"] else ""
+            ", it can take a while)" if offer["total"] > modlib_share_limit() else ")") if offer["total"] else ""
         if offer["setup"]:
             ms = next(sc for sc in app.screens if sc.name == "mods")
             app.dialog("Your friend plays with mods",
@@ -225,8 +225,8 @@ class PlayScreen(Screen):
                         ("Set up", lambda: ms.setup(then=lambda: self._join_go()), "primary")], width=960)
             return
         app.dialog("Get your friend's mods?",
-                   f"Your friend plays with {len(names)} mod(s) you don't have or have turned off: {shown}."
-                   f"{msg_size}\n\nMods only change what you see on your own screen, so copy them to see the game "
+                   f"Your friend plays with {len(names)} mod(s) you don't have or have turned off: {shown}"
+                   f"{msg_size}.\n\nMods only change what you see on your own screen, so copy them to see the game "
                    "like your friend does. Your own mods stay; you can turn any of them off later on the Mods tab.",
                    [("Not now", skip, "ghost"), ("Get mods & play", lambda: self._get_friend_mods(host, offer),
                                                  "primary")], width=980)

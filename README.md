@@ -23,15 +23,19 @@ It doesn't need Apache. The launcher has its own small "login bridge" that does 
 
 ![Play screen](docs/screenshots/play.png)
 
-| Friends | Mods | Install a mod |
+| Friends (host over Tailscale) | Deck to Deck (no router) | Move my heroes |
 | --- | --- | --- |
-| ![Friends](docs/screenshots/friends.png) | ![Mods](docs/screenshots/mods.png) | ![Install a mod](docs/screenshots/mods-install.png) |
+| ![Friends](docs/screenshots/friends.png) | ![Deck to Deck](docs/screenshots/deck-to-deck.png) | ![Move my heroes](docs/screenshots/move-heroes.png) |
+| **Mods** | **Your friend's mods** | **Install a mod** |
+| ![Mods](docs/screenshots/mods.png) | ![Friend's mods](docs/screenshots/friend-mods.png) | ![Install a mod](docs/screenshots/mods-install.png) |
+| **Server** | **Cash shop points (G)** | **Game client** |
+| ![Server](docs/screenshots/server.png) | ![Cash shop](docs/screenshots/cash-shop.png) | ![Client](docs/screenshots/client.png) |
+| **Create account** | **Saved accounts** | **On-screen keyboard** |
+| ![Create account](docs/screenshots/create-account.png) | ![Accounts](docs/screenshots/accounts.png) | ![Keyboard](docs/screenshots/keyboard.png) |
+| **Settings** | | |
+| ![Settings](docs/screenshots/settings.png) | | |
 
-| Accounts | Server | Game client |
-| --- | --- | --- |
-| ![Create account](docs/screenshots/create-account.png) | ![Server](docs/screenshots/server.png) | ![Client](docs/screenshots/client.png) |
-| **Settings** | **On-screen keyboard** | **Saved accounts** |
-| ![Settings](docs/screenshots/settings.png) | ![Keyboard](docs/screenshots/keyboard.png) | ![Accounts](docs/screenshots/accounts.png) |
+<sub>Screenshots from v1.6.0 in a demo setup (`tools/make-screenshots.py`).</sub>
 
 ## What's in the download
 
