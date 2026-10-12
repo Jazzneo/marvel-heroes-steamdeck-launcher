@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.6.1
+- **Fix: Remove on the Mods tab failed with just "RuntimeError"** when the mod was already turned off but the change wasn't applied yet. Remove now applies pending changes first (the Mod Manager only lets a mod go once none of its files are in the game), then removes it.
+- Errors without details now say where the log is instead of only an error name.
+- Friend's mods offer: fixed a misplaced full stop.
+
 ## v1.6.0
 - **Add to Steam now looks like the real game.** The shortcut is called **Marvel Heroes Omega** and gets the game's library artwork: tall cover, wide banner, big background, logo and icon.
   - If Marvel Heroes Omega is in your Steam library, the official artwork comes from Steam's own cache on your Deck. Otherwise the launcher tries Steam's image servers (the game left the store in 2017, so some sizes may be missing). Anything still missing gets MH Launcher artwork.

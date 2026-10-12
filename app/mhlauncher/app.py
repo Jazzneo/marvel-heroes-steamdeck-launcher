@@ -492,7 +492,9 @@ class App:
                 elif isinstance(err, PortConflict):
                     self.dialog("Port already in use", str(err) + "\n\nClose that program (or reboot) and try again.")
                 elif err is not None:
-                    self.dialog("Something went wrong", str(err) or err.__class__.__name__)
+                    self.dialog("Something went wrong", str(err) or (
+                        f"{err.__class__.__name__} with no details. The launcher log has more: "
+                        f"{os.path.join(LOG_DIR, 'launcher.log')}"), width=900)
                 elif on_done:
                     on_done(res)
             self.call_soon(finish)

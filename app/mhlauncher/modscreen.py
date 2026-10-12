@@ -254,16 +254,27 @@ class ModsScreen(Screen):
         self.live_log = []
 
         def work(p):
-            if m.enabled:
-                self.lib.set_enabled(m, False)
+            applied = False
+            # The Mod Manager only lets a mod go once none of its files are in the game any more, so turn it off
+            # and apply first - also when it was already off but the change wasn't applied yet.
+            if m.enabled or self.s.get("mods_dirty"):
+                if m.enabled:
+                    self.lib.set_enabled(m, False)
                 ok, summary = self.apply_blocking(p, self._log_line)
                 if not ok:
-                    raise RuntimeError("Couldn't take the mod out of the game first:\n" + summary)
+                    raise RuntimeError("Couldn't take the mod out of the game first:\n" + (summary or "see the log") +
+                                       f"\n\nLog: {os.path.join(LOG_DIR, 'modmanager.log')}")
+                applied = True
             p(None, "Checking it can be removed…")
             code, out = mods.run_cli(self.s, self._runner(), self._game_root(),
                                      ["--remove", m.id, "--dry-run"], on_line=self._log_line)
             if code != 0:
-                raise RuntimeError("\n".join(out.splitlines()[-6:]))
+                msg = "\n".join(out.splitlines()[-8:]).strip()
+                if msg or not applied:
+                    raise RuntimeError((msg or f"The Mod Manager stopped with code {code} without saying why.") +
+                                       f"\n\nLog: {os.path.join(LOG_DIR, 'modmanager.log')}")
+                # no message, but Apply just succeeded with the mod off: nothing of it is left in the game
+                mods.mlog(f"--remove --dry-run gave exit {code} without output; removing after a good apply")
             lib = mods.Library()
             target = lib.find(m.id)
             return lib.remove_folder(target) if target else None
