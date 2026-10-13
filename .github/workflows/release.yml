@@ -1,0 +1,63 @@
+name: Release
+
+# Publishes MHLauncher-linux-x64.tar.xz as release v<APP_VERSION from app/mhlauncher/config.py>.
+# Start it from the Actions tab (Release -> Run workflow).
+#
+# The bundled Python runtime and MHServerEmu are taken unchanged from the previous release's package;
+# only the launcher itself (app, assets, tools, MHLauncher.sh, README, LICENSE) is replaced.
+# To change the runtime or server, build locally with tools/build-release.sh and upload that instead.
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Release whose runtime + server to reuse (empty = latest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        run: |
+          ver=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' app/mhlauncher/config.py)
+          test -n "$ver"
+          if gh release view "v$ver" >/dev/null 2>&1; then echo "v$ver already exists"; exit 1; fi
+          echo "VER=$ver" >> "$GITHUB_ENV"
+      - name: Take runtime + server from the previous release
+        run: |
+          base="${{ inputs.base }}"
+          [ -n "$base" ] || base=$(gh release view --json tagName --jq .tagName)
+          echo "base release: $base"
+          gh release download "$base" -p MHLauncher-linux-x64.tar.xz -D prev
+          mkdir build && tar -C build -xJf prev/MHLauncher-linux-x64.tar.xz
+          test -x build/MHLauncher/runtime/python/bin/python3
+          test -f build/MHLauncher/server/MHServerEmu.dll
+      - name: Put in this launcher
+        run: |
+          OUT=build/MHLauncher
+          rm -rf "$OUT/app" "$OUT/assets" "$OUT/tools"
+          cp -r MHLauncher.sh README.md LICENSE app assets tools "$OUT/"
+          find "$OUT" -name __pycache__ -prune -exec rm -rf {} +
+          rm -f "$OUT/tools/build-release.sh"
+          chmod +x "$OUT/MHLauncher.sh"
+          echo "$VER" > "$OUT/VERSION"
+          mkdir dist && tar -C build -cJf dist/MHLauncher-linux-x64.tar.xz MHLauncher
+          ls -lh dist
+      - name: Notes from CHANGELOG.md
+        run: |
+          {
+            echo "Download **MHLauncher-linux-x64.tar.xz** below, unpack it into your MHLauncher folder (replace the files) and start MHLauncher.sh. Your accounts, settings, saves and mods are kept."
+            echo
+            echo "### New in v$VER"
+            awk -v v="## v$VER" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md
+          } > notes.md
+          cat notes.md
+      - name: Publish
+        run: gh release create "v$VER" dist/MHLauncher-linux-x64.tar.xz --target "$GITHUB_SHA" --title "MH Launcher v$VER" --notes-file notes.md
