@@ -92,6 +92,7 @@ The touchscreen and trackpads work too. Text fields open a controller-friendly k
 * **Accounts** – saved accounts (choose the active one, Y to remove), Sign in, Create account.
 * **Friends** – **Host for friends** (your address to share, firewall/router helpers, friends online) and **Join** (your friend's address, create an account on their server, test the connection, play on their server). See [Playing with friends](#playing-with-friends).
 * **Mods** – your mod list: **A** turns a mod on/off, move mods higher/lower (the higher mod wins when two change the same file), **Install mod…** (newest downloads first, or Browse), **Apply changes**, **Remove**, and **Full Mod Manager** for the editor and Nexus features. See [Mods](#mods) below.
+* **Modules** – bigger game changes than mods can make, like a new playable hero: **Install module…**, **A** turns a module on/off, **Apply changes**, **Remove**. Removing one puts every game file back exactly as it was. See [Modules](#modules) below.
 * **Server** – ON/OFF, live log, a console command box (e.g. `!commands`, `!account userlevel me@deck.local 2`), and options written to `ConfigOverride.ini`: unlock all heroes/team-ups, free-for-all loot, free movement powers, preload data, allow other client versions, allow LAN players.
 * **Game Client** – client path and version, which Proton/Wine to use (or a custom command with `{exe}` and `{args}`), auto-login, 1280×800 resolution, skip intro movies, extra launch options.
 * **Settings** – install .NET, port status, import a newer server zip (your accounts are kept), Add to Steam, launcher behaviour.
@@ -177,6 +178,22 @@ The Mods tab is a controller-friendly front end for **[MHO Extended Mod Manager]
 * **Full Mod Manager** opens the original window, with its editor, tags, Nexus update checks and Find My Mods. It uses the same library, so changes show up in the launcher too. It's a Windows desktop app, so use it with a mouse/trackpad.
 * **Update tool** installs the newest MHO Extended Mod Manager release.
 
+## Modules
+
+A **module** adds things a mod can't: new playable heroes, new powers, new gear, with their game data (`Calligraphy.sip`, which the server reads too) and new text. Modules are separate from the Mods tab and don't need the Mod Manager.
+
+1. Download a module (`.zip` with a `module.json` inside) into `~/Downloads`.
+2. **Modules → Install module…** It comes in turned **on**.
+3. **Apply changes**, or just press **PLAY**: modules are applied before the server starts, and the server gets the same game data automatically.
+
+* **Turn off** or **Remove** puts every game file the module changed back **exactly** as it was (byte for byte), and on the next Apply/PLAY the module is out of the game.
+* **Heroes and items from a module need it turned on.** If you log in while a hero module is off, the server can't load that hero (or its items) and drops them from your save. So turning off or removing a module that adds game data asks first and backs up your save (`Account.db`) to `~/.local/share/MHLauncher/save-backups/`.
+* **With the Mods tab:** some files are shared (the icon package and text files). Before the Mod Manager applies, modules step back so it finds its files the way it left them, then come back on top. You don't have to do anything.
+* **On a friend's server** modules are taken out for that session (their server only knows its own game data); your next PLAY on your own server puts them back.
+* When two modules change the same file, the one **higher** in the list is applied last and wins.
+
+Making modules: see [docs/modules.md](docs/modules.md).
+
 ## Where things are stored
 
 | What | Where |
@@ -184,8 +201,9 @@ The Mods tab is a controller-friendly front end for **[MHO Extended Mod Manager]
 | Server, accounts database (`Data/Account.db`), `ConfigOverride.ini` | `~/.local/share/MHLauncher/MHServerEmu/` |
 | .NET runtime (if the launcher installed it) | `~/.local/share/MHLauncher/dotnet/` |
 | Proton/Wine prefix for the game | `~/.local/share/MHLauncher/prefix/` |
-| Logs (`server.log`, `client.log`, `launcher.log`, `modmanager.log`) | `~/.local/share/MHLauncher/logs/` |
+| Logs (`server.log`, `client.log`, `launcher.log`, `modmanager.log`, `modules.log`) | `~/.local/share/MHLauncher/logs/` |
 | Mod library (`mods/`, `state.json`), removed mods, Mod Manager app | `~/.local/share/MHLauncher/modmanager/` |
+| Modules (`library/`, `state.json`), the original game files modules changed (`bases/`), removed modules | `~/.local/share/MHLauncher/modules/` |
 | Launcher settings and saved logins (permissions 600) | `~/.config/MHLauncher/settings.json` |
 
 Back up `Account.db` before big server updates. To update the server, download a newer `MHServerEmu-…-linux-x64.zip`, turn the server off, and use **Settings → Import server .zip**.

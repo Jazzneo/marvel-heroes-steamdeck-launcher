@@ -200,8 +200,16 @@ class ModsScreen(Screen):
 
     def apply_blocking(self, progress, on_line=None):
         """Worker thread: make the game match the mod list. Returns (ok, summary)."""
+        from . import modules
+        root = self._game_root()
+        # Modules patch some of the files the Mod Manager rebuilds (icons, text): step back so it finds them the way
+        # it left them, then put the module changes back on top of its new files.
+        modules.release_all(root, progress)
         progress(None, "Applying mod changes…")
-        code, out = mods.run_cli(self.s, self._runner(), self._game_root(), ["--apply"], on_line=on_line)
+        try:
+            code, out = mods.run_cli(self.s, self._runner(), root, ["--apply"], on_line=on_line)
+        finally:
+            modules.apply(root, progress)
         lines = [l for l in out.splitlines() if not l.startswith("MHO Extended Mod Manager v")]
         summary = [l for l in lines if "file(s)" in l or "Applied" in l or "Stopped" in l or "close it first" in l]
         if code == 0:

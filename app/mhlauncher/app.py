@@ -392,9 +392,10 @@ class App:
 
         from . import screens
         from .modscreen import ModsScreen
+        from .modulescreen import ModulesScreen
         from .friendscreen import FriendsScreen
         self.screens = [screens.PlayScreen(self), screens.AccountsScreen(self), FriendsScreen(self),
-                        ModsScreen(self), screens.ServerScreen(self), screens.ClientScreen(self),
+                        ModsScreen(self), ModulesScreen(self), screens.ServerScreen(self), screens.ClientScreen(self),
                         screens.SettingsScreen(self)]
         self.screen_i = 0
         self._srv_was_online = False
@@ -549,6 +550,11 @@ class App:
         client_root = self.settings.get("client_root")
         if client_root and not self.server.game_data_ok():
             progress(None, "Copying game data from your client…")
+            from . import modules
+            if not self.game_running and modules.needs_apply(client_root):
+                progress(None, "Applying modules…")
+                modules.apply(client_root, progress)   # the server must get the modules' game data
+                self.settings.set("modules_dirty", False)
             self.server.sync_game_data(client_root)
         if not self.bridge.running or self.bridge.http_port != 80 or \
                 self.bridge.hosting != bool(self.settings.get("lan_mode")):
@@ -939,10 +945,11 @@ class App:
     def sidebar_widgets(self):
         ws = []
         y = 150
+        step = min(66, (H - 64 - 72 - 8 - y) // max(1, len(self.screens)))   # 8 tabs still fit above Quit
         for i, s in enumerate(self.screens):
-            ws.append(ui.NavItem(f"nav{i}", (16, y, SIDEBAR_W - 32, 58), s.title,
+            ws.append(ui.NavItem(f"nav{i}", (16, y, SIDEBAR_W - 32, step - 8), s.title,
                                  lambda i=i: self.go(i), i == self.screen_i, s.badge()))
-            y += 66
+            y += step
         ws.append(ui.NavItem("navquit", (16, H - 64 - 72, SIDEBAR_W - 32, 54), "Quit",
                              self.request_quit, False))
         return ws

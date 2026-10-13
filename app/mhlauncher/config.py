@@ -4,7 +4,7 @@ import os
 import threading
 
 APP_NAME = "MHLauncher"
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.7.0"
 
 # Folder that contains MHLauncher.sh (two levels above this file: app/mhlauncher/config.py)
 BUNDLE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -56,6 +56,7 @@ DEFAULTS = {
     "server_options": {},       # ConfigOverride.ini values {"Section.Key": "value"}
     "fullscreen": None,         # None = auto (fullscreen in Gaming Mode)
     "mods_dirty": False,
+    "modules_dirty": False,     # module list changed since the last Apply (Modules tab)
     "share_mods": True,         # friends can copy my turned-on mods while I host
     "friend_mods_skip": "",     # "Not now" for this exact set of a friend's mods        # mod list changed since the last Apply
 }

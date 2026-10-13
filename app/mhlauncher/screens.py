@@ -143,6 +143,11 @@ class PlayScreen(Screen):
         acc = self.s.active_account()
 
         def work(progress):
+            from . import modules
+            if modules.needs_apply(ci["root"]):
+                progress(None, "Applying modules…")
+                modules.apply(ci["root"], progress)      # before the server copies Calligraphy.sip from the client
+                self.s.set("modules_dirty", False)
             try:
                 app.server.sync_game_data(ci["root"])
             except FileNotFoundError as e:
@@ -284,6 +289,13 @@ class PlayScreen(Screen):
                 ok_m, summary = ms.apply_blocking(progress)
                 if not ok_m:
                     raise RuntimeError("Your mod changes couldn't be applied:\n\n" + summary)
+            from . import modules
+            root = self.s.get("client_root")
+            if root and modules.Library().state["files"]:
+                # A friend's server only knows the game data it has itself, so modules (new heroes, ...) are taken
+                # out while you play there. Your next PLAY on your own server puts them back.
+                progress(None, "Taking modules out for your friend's server…")
+                modules.release_all(root, progress)
             progress(None, "Launching Marvel Heroes…")
             return True
 
@@ -758,6 +770,9 @@ class ClientScreen(Screen):
         self.app.screens[0].refresh()
         if info["sip"] and self.app.server.installed():
             try:
+                from . import modules
+                if not self.app.game_running and modules.Library().state["enabled"] and modules.needs_apply(info["root"]):
+                    modules.apply(info["root"])          # the server copy must include the modules' game data
                 copied = self.app.server.sync_game_data(info["root"])
                 if copied:
                     self.app.toast("Copied game data to the server: " + ", ".join(copied), "ok")

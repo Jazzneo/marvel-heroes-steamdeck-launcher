@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.0
+- **New Modules tab: install new heroes and other big changes, and take them out again.** A module can add what a mod can't: new playable heroes, powers and gear with their game data (`Calligraphy.sip`) and new text, plus models, power effects and icons.
+  - **Install module…**, turn on/off, order, **Apply changes**, **Remove**. PLAY applies pending changes by itself.
+  - Turning a module off or removing it puts every game file it changed back exactly as it was.
+  - The server always gets the same game data: modules are applied before the launcher copies `Calligraphy.sip` to the server.
+  - Works together with the Mods tab: modules step back before the Mod Manager applies and come back on top, so the Mod Manager always finds its files the way it left them.
+  - On a friend's server modules are taken out for that session; your next PLAY at home puts them back.
+  - First module: **Playable Jubilee**. How to make modules: `docs/modules.md`.
+- The sidebar fits the extra tab.
+
 ## v1.6.1
 - **Fix: Remove on the Mods tab failed with just "RuntimeError"** when the mod was already turned off but the change wasn't applied yet. Remove now applies pending changes first (the Mod Manager only lets a mod go once none of its files are in the game), then removes it.
 - Errors without details now say where the log is instead of only an error name.
