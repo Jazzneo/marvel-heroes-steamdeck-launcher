@@ -4,7 +4,7 @@ name: Release
 # Start it from the Actions tab (Release -> Run workflow).
 #
 # The bundled Python runtime and MHServerEmu are taken unchanged from the previous release's package;
-# only the launcher itself (app, assets, tools, MHLauncher.sh, README, LICENSE) is replaced.
+# only the launcher itself (app, assets, tools, MHLauncher.sh, README, CHANGELOG, LICENSE) is replaced.
 # To change the runtime or server, build locally with tools/build-release.sh and upload that instead.
 on:
   workflow_dispatch:
@@ -43,7 +43,7 @@ jobs:
         run: |
           OUT=build/MHLauncher
           rm -rf "$OUT/app" "$OUT/assets" "$OUT/tools"
-          cp -r MHLauncher.sh README.md LICENSE app assets tools "$OUT/"
+          cp -r MHLauncher.sh README.md CHANGELOG.md LICENSE app assets tools "$OUT/"
           find "$OUT" -name __pycache__ -prune -exec rm -rf {} +
           rm -f "$OUT/tools/build-release.sh"
           chmod +x "$OUT/MHLauncher.sh"
