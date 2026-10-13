@@ -18,13 +18,13 @@ strings/<lang>.json                      new text lines
 ```json
 {
   "format": 1,
-  "id": "playable-jubilee",
-  "name": "Playable Jubilee",
-  "version": "0.6.3",
-  "author": "Jazneo",
+  "id": "my-new-hero",
+  "name": "My New Hero",
+  "version": "1.0.0",
+  "author": "Your name",
   "description": "Shown on the Modules tab.",
   "game": "Marvel Heroes Omega 1.52.0.1700",
-  "files": ["UnrealEngine3/MarvelGame/CookedPCConsole/UC__MarvelTeamUp_Jubilee_SF.upk"],
+  "files": ["UnrealEngine3/MarvelGame/CookedPCConsole/UC__MarvelTeamUp_Example_SF.upk"],
   "textures": [{"package": "ICO__MarvelUIIcons_SF.upk", "texture": "Item_Art329", "file": "textures/Item_Art329.dxt5"}],
   "calligraphy": "calligraphy.json",
   "strings": {"eng": "strings/eng.json"}
@@ -44,9 +44,9 @@ strings/<lang>.json                      new text lines
   changed guid makes the server forget heroes and items that use it.
 
   ```json
-  {"prototypes": [{"path": "Powers/Player/Jubilee/BigBang.prototype", "id": "…16 hex digits…",
+  {"prototypes": [{"path": "Powers/Player/MyHero/BigPunch.prototype", "id": "…16 hex digits…",
                    "guid": "…", "blueprint": "…", "flags": 2}],
-   "blueprints": [{"path": "Entity/Items/Armor/Blueprints/Jubilee/ArmorJubileeTop.blueprint", "id": "…",
+   "blueprints": [{"path": "Entity/Items/Armor/Blueprints/MyHero/ArmorMyHeroTop.blueprint", "id": "…",
                    "guid": "…", "flags": 1}]}
   ```
 

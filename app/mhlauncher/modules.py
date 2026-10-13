@@ -587,6 +587,45 @@ def _build(rel, base, mods_for_file):
     return out
 
 
+def _string_ids(data):
+    n, = struct.unpack_from("<H", data, 4)
+    p, ids = 6, set()
+    for _ in range(n):
+        sid, nv = struct.unpack_from("<QH", data, p)
+        ids.add(sid)
+        p += 16 + 14 * max(nv - 1, 0)
+    return ids
+
+
+def _already_in(rel, data, mods_for_file):
+    """The module (if any) whose changes are already in `data` -- e.g. it was installed by hand before.
+    Taking such a file as the base would make turning the module off put the module's version back."""
+    if not data:
+        return None
+    for m in mods_for_file:
+        if rel == CALLIGRAPHY:
+            spec, _loose = m.calligraphy()
+            sip = Sip(data)
+            have = _directory_ids(sip.read("Calligraphy/Prototype.directory"), proto=True)
+            if any(int(e["id"], 16) in have for e in spec.get("prototypes", [])):
+                return m
+            continue
+        if rel in m.files and _md5(m.path(os.path.join("files", rel))) == _md5b(data):
+            return m
+        for t in m.textures:
+            if rel.endswith("/" + t["package"]):
+                with open(m.path(t["file"]), "rb") as f:
+                    pix = f.read()
+                at = _upk_find_texture_data(data, t["texture"], len(pix))
+                if at is not None and data[at:at + len(pix)] == pix:
+                    return m
+        for lang, lines in m.strings().items():
+            mine = [sid for sid in lines if string_file_for(lang, sid) == rel]
+            if mine and set(mine) <= _string_ids(data):
+                return m
+    return None
+
+
 def plan(game_root, lib=None):
     """{game file: [modules that change it]} for the active modules, plus files no active module wants any more."""
     lib = lib or Library()
@@ -653,6 +692,18 @@ def apply(game_root, progress=None, lib=None):
             os.remove(_base_path(rel))
         except OSError:
             pass
+    for rel, mods_for_file in want.items():       # check first, so nothing is half done
+        full, cur = _current(game_root, rel)
+        rec = lib.state["files"].get(rel)
+        if cur and not (rec and cur == rec.get("out")):   # this file would become a new base
+            with open(full, "rb") as f:
+                hit = _already_in(rel, f.read(), mods_for_file)
+            if hit:
+                mlog(f"apply refused: {rel} already has {hit.id} in it")
+                raise ValueError(
+                    f"{os.path.basename(rel)} already has {hit.name} in it (installed by hand, or by an "
+                    f"older version). Put the game's original {os.path.basename(rel)} back, then press "
+                    f"Apply changes again. Otherwise turning {hit.name} off couldn't take it out.")
     for rel, mods_for_file in want.items():
         full, cur = _current(game_root, rel)
         rec = lib.state["files"].get(rel)

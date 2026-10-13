@@ -7,7 +7,7 @@
   - The server always gets the same game data: modules are applied before the launcher copies `Calligraphy.sip` to the server.
   - Works together with the Mods tab: modules step back before the Mod Manager applies and come back on top, so the Mod Manager always finds its files the way it left them.
   - On a friend's server modules are taken out for that session; your next PLAY at home puts them back.
-  - First module: **Playable Jubilee**. How to make modules: `docs/modules.md`.
+  - Modules can't be applied over files that already have them in (for example a hero installed by hand), so turning a module off always takes it out. How to make modules: `docs/modules.md`.
 - The sidebar fits the extra tab.
 
 ## v1.6.1
