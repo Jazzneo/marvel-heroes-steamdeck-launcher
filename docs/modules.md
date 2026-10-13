@@ -37,8 +37,9 @@ strings/<lang>.json                      new text lines
   (or adds it if the game doesn't have it).
 * **textures**: for icon packages that other mods also change (the Mod Manager rebuilds `ICO__MarvelUIIcons_SF.upk`).
   Instead of replacing the whole package, the module patches single textures inside it. The data must be exactly the
-  texture's own mip data (same format and size, e.g. 40×40 DXT5 = 1600 bytes), and the package must be uncompressed.
-  For compressed packages, ship the whole package in `files`.
+  texture's own mip data (same format and size, e.g. 40×40 DXT5 = 1600 bytes). Compressed packages work too
+  (the launcher unpacks them and compresses the changed parts again). If a texture isn't found at that size, for
+  example because another mod changed that icon, it is skipped and noted in the log; the rest still apply.
 * **calligraphy**: `calligraphy.json` lists the directory entries for new prototypes and blueprints, in the order they
   are added. Keep the ids and guids the same from one version to the next: saves refer to prototypes by guid, so a
   changed guid makes the server forget heroes and items that use it.

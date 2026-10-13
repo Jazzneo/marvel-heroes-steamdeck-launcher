@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.7.1
+- **Fix: "Couldn't apply modules … texture not found in ICO__MarvelUIIcons_SF.upk".** Module icons now go into the icon package whether it is the game's original (compressed) or one the Mod Manager rebuilt. If another mod changed one of those icons, that single icon is skipped (noted in `logs/modules.log`) instead of stopping the whole module.
+
 ## v1.7.0
 - **New Modules tab: install new heroes and other big changes, and take them out again.** A module can add what a mod can't: new playable heroes, powers and gear with their game data (`Calligraphy.sip`) and new text, plus models, power effects and icons.
   - **Install module…**, turn on/off, order, **Apply changes**, **Remove**. PLAY applies pending changes by itself.

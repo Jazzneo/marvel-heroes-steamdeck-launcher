@@ -40,6 +40,7 @@ import time
 import zipfile
 import zlib
 
+from . import lzo
 from .config import DATA_DIR, LOG_DIR
 
 ROOT = os.path.join(DATA_DIR, "modules")
@@ -321,16 +322,77 @@ def _relayout_strings(head, ents, _data, _table_end, _shift, page, page_start):
     return bytes(table + body)
 
 
-# ======================================================================== textures inside uncompressed packages
+# ======================================================================== textures inside icon packages
+def _upk_chunks(data):
+    """(compression flags, position of the chunk table, [(uoff, usize, coff, csize)]) of a .upk."""
+    if data[:4] != b"\xc1\x83\x2a\x9e":
+        raise ValueError("not a game package")
+    fl, = struct.unpack_from("<i", data, 12)
+    p = 16 + fl + 48 + 16
+    gens, = struct.unpack_from("<i", data, p)
+    p += 4 + 12 * gens
+    _engine, _cooker, comp, nch = struct.unpack_from("<iiIi", data, p)
+    table = p + 16
+    return comp, table, [struct.unpack_from("<iiii", data, table + 16 * i) for i in range(nch)]
+
+
+def _upk_unpack(data):
+    """The package as one uncompressed image (offsets inside it are the ones the package uses), and its chunks
+    (None if it wasn't compressed)."""
+    comp, _table, chunks = _upk_chunks(data)
+    if not comp or not chunks:
+        return data, None
+    if comp != 2:
+        raise ValueError(f"unsupported package compression {comp}")
+    out = bytearray(data[:chunks[0][0]])
+    for uoff, usz, coff, _csz in chunks:
+        if uoff != len(out):
+            raise ValueError("package chunks aren't in order")
+        q = coff + 16
+        _tag, _bs, _tc, total = struct.unpack_from("<Iiii", data, coff)
+        blocks, got = [], 0
+        while got < total:
+            c, u = struct.unpack_from("<ii", data, q)
+            q += 8
+            blocks.append((c, u))
+            got += u
+        for c, u in blocks:
+            out += lzo.decompress(data[q:q + c], u)
+            q += c
+        if len(out) != uoff + usz:
+            raise ValueError("package chunk has the wrong size")
+    return bytes(out), chunks
+
+
+def _upk_repack(orig, chunks, unc, changed):
+    """`orig` (compressed) with the chunks that hold the changed ranges [(start, end)] compressed again from `unc`."""
+    _comp, table, _ = _upk_chunks(orig)
+    head = bytearray(orig[:chunks[0][2]])
+    body = bytearray()
+    coff = chunks[0][2]
+    for i, (uoff, usz, ocoff, ocsz) in enumerate(chunks):
+        if any(a < uoff + usz and b > uoff for a, b in changed):
+            tag, bs, _tc, _tu = struct.unpack_from("<Iiii", orig, ocoff)
+            raw = unc[uoff:uoff + usz]
+            blocks = [lzo.compress(raw[b:b + bs]) for b in range(0, usz, bs)]
+            sizes = [len(raw[b:b + bs]) for b in range(0, usz, bs)]
+            chunk = (struct.pack("<Iiii", tag, bs, sum(map(len, blocks)), usz)
+                     + b"".join(struct.pack("<ii", len(c), u) for c, u in zip(blocks, sizes)) + b"".join(blocks))
+        else:
+            chunk = orig[ocoff:ocoff + ocsz]
+        struct.pack_into("<iiii", head, table + 16 * i, uoff, usz, coff, len(chunk))
+        body += chunk
+        coff += len(chunk)
+    return bytes(head + body)
+
+
 def _upk_find_texture_data(data, texture, size):
-    """Offset of the inline mip data of `texture` (exact size) in an uncompressed .upk, or None."""
+    """Offset of the inline mip data of `texture` (exact size) in an uncompressed package image, or None."""
     if data[:4] != b"\xc1\x83\x2a\x9e":
         raise ValueError("not a game package")
     fl, = struct.unpack_from("<i", data, 12)
     h = 16 + fl
-    pkg_flags, ncount, noff, ecount, eoff = struct.unpack_from("<Iiiii", data, h)
-    if pkg_flags & 0x02000000:
-        raise ValueError("compressed package (only uncompressed icon packages can be patched)")
+    _pkg_flags, ncount, noff, ecount, eoff = struct.unpack_from("<Iiiii", data, h)
     names = []
     p = noff
     for _ in range(ncount):
@@ -548,6 +610,27 @@ def _base_path(rel):
     return os.path.join(BASES, rel.replace("/", os.sep))
 
 
+def _patch_textures(data, m, textures):
+    """Write the module's icon textures into a package (compressed or not). A texture that can't be found as
+    expected (e.g. another mod changed that icon) is skipped and logged: the item just keeps its old icon."""
+    unc, chunks = _upk_unpack(data)
+    buf = bytearray(unc)
+    changed = []
+    for t in textures:
+        with open(m.path(t["file"]), "rb") as f:
+            pix = f.read()
+        at = _upk_find_texture_data(bytes(buf), t["texture"], len(pix))
+        if at is None:
+            mlog(f"warning: {m.id}: icon {t['texture']} in {t['package']} isn't a {len(pix)}-byte texture "
+                 f"(another mod may have changed it); keeping that icon as it is")
+            continue
+        buf[at:at + len(pix)] = pix
+        changed.append((at, at + len(pix)))
+    if not changed:
+        return data
+    return _upk_repack(data, chunks, bytes(buf), changed) if chunks else bytes(buf)
+
+
 def _build(rel, base, mods_for_file):
     """The file `rel` with every active module's changes applied on top of `base` (bytes)."""
     if rel == CALLIGRAPHY:
@@ -569,17 +652,9 @@ def _build(rel, base, mods_for_file):
         if rel in m.files:
             with open(m.path(os.path.join("files", rel)), "rb") as f:
                 out = f.read()
-        for t in m.textures:
-            if rel.endswith("/" + t["package"]):
-                with open(m.path(t["file"]), "rb") as f:
-                    pix = f.read()
-                buf = bytearray(out)
-                at = _upk_find_texture_data(bytes(buf), t["texture"], len(pix))
-                if at is None:
-                    raise ValueError(f"{m.name}: texture {t['texture']} not found in {t['package']} "
-                                     f"(or it isn't {len(pix)} bytes)")
-                buf[at:at + len(pix)] = pix
-                out = bytes(buf)
+        mine = [t for t in m.textures if rel.endswith("/" + t["package"])]
+        if mine:
+            out = _patch_textures(out, m, mine)
         for lang, lines in m.strings().items():
             mine = {sid: txt for sid, txt in lines.items() if string_file_for(lang, sid) == rel}
             if mine:
@@ -612,12 +687,14 @@ def _already_in(rel, data, mods_for_file):
             continue
         if rel in m.files and _md5(m.path(os.path.join("files", rel))) == _md5b(data):
             return m
-        for t in m.textures:
-            if rel.endswith("/" + t["package"]):
+        mine = [t for t in m.textures if rel.endswith("/" + t["package"])]
+        if mine:
+            unc, _chunks = _upk_unpack(data)
+            for t in mine:
                 with open(m.path(t["file"]), "rb") as f:
                     pix = f.read()
-                at = _upk_find_texture_data(data, t["texture"], len(pix))
-                if at is not None and data[at:at + len(pix)] == pix:
+                at = _upk_find_texture_data(unc, t["texture"], len(pix))
+                if at is not None and unc[at:at + len(pix)] == pix:
                     return m
         for lang, lines in m.strings().items():
             mine = [sid for sid in lines if string_file_for(lang, sid) == rel]
