@@ -6,6 +6,8 @@ A module is its own thing, separate from the Mods tab. It can change everything 
   * icons, patched inside icon packages   (a few textures in ICO__MarvelUIIcons_SF.upk, which other mods share)
   * game data                             (Data/Game/Calligraphy.sip: new or changed prototypes and blueprints)
   * text                                  (new lines in Data/Game/Loco/<lang>.all/*.string)
+  * model names                           (new Unreal classes: an asset in Calligraphy.sip's type file, and where
+                                           the client finds the class in AssetPackageCache.bin)
 
 Turning a module off (or removing it) puts every file back exactly as it was, byte for byte.
 
@@ -29,6 +31,12 @@ Module archive (.zip):
                                     "blueprints": [{"path", "id", "guid", "flags"}]}
   calligraphy/<path>               files added to / replacing files in Calligraphy.sip
   strings/<lang>.json              {"<string id, hex>": "text"}  (new lines only)
+
+  Format 2 (MH Launcher 1.8.0 and later) adds "requires": ["<module id>", ...] (only applied while those are on) and
+  new model names:
+  "assets": [{"type": "Entity/Types/UnrealClass.type", "id": "<hex>", "guid": "<hex>", "name": "MarvelHB_X",
+              "class": "marvelgamecontent.MarvelHB_X", "packages": ["uc__marvelteamup_sf", "uc__marvelhb_x_sf"]}]
+  "class" and "packages" are optional; with them the client knows which packages hold the class (load order).
 """
 import hashlib
 import json
@@ -48,8 +56,9 @@ LIBRARY = os.path.join(ROOT, "library")          # installed modules (one folder
 BASES = os.path.join(ROOT, "bases")              # game files as they were before modules changed them
 REMOVED = os.path.join(ROOT, "removed")          # removed modules (kept, just in case)
 STATE = os.path.join(ROOT, "state.json")
-FORMAT = 1
+FORMAT = 2                                       # 2: "assets" and "requires" (MH Launcher 1.8.0)
 CALLIGRAPHY = "Data/Game/Calligraphy.sip"
+PACKAGE_CACHE = "UnrealEngine3/MarvelGame/CookedPCConsole/AssetPackageCache.bin"
 
 
 def mlog(msg):
@@ -247,6 +256,116 @@ def _directory_ids(directory, proto):
     return ids
 
 
+# ======================================================================== model names (asset types, package cache)
+def _type_ids(data):
+    """Asset ids in a Calligraphy .type file: header(4) count(u16) then (id u64, guid u64, flags u8, name)."""
+    n, = struct.unpack_from("<H", data, 4)
+    p, ids = 6, set()
+    for _ in range(n):
+        ids.add(struct.unpack_from("<Q", data, p)[0])
+        p += 17
+        ln, = struct.unpack_from("<H", data, p)
+        p += 2 + ln
+    return ids
+
+
+def _signed(v):
+    return v - (1 << 64) if v >= 1 << 63 else v
+
+
+def add_assets(data, entries):
+    """A .type file with the new assets added. The game keeps every asset list sorted by id (read as a signed
+    64-bit number) and the client searches it that way: an asset out of order is "not found" and the client stops
+    with "Assertion failed: i>=0 && (i<ArrayNum...". So new assets go in at their sorted place; existing entries
+    keep their bytes and their order."""
+    n, = struct.unpack_from("<H", data, 4)
+    p, rows = 6, []
+    for _ in range(n):
+        aid, = struct.unpack_from("<Q", data, p)
+        ln, = struct.unpack_from("<H", data, p + 17)
+        rows.append((aid, data[p:p + 19 + ln]))
+        p += 19 + ln
+    have = {aid for aid, _ in rows}
+    added = []
+    for e in entries:
+        aid = int(e["id"], 16)
+        if aid in have:
+            continue
+        name = e["name"].encode()
+        added.append((aid, struct.pack("<QQB", aid, int(e["guid"], 16), int(e.get("flags", 0))) +
+                      struct.pack("<H", len(name)) + name))
+        have.add(aid)
+    if not added:
+        return bytes(data)
+    if n + len(added) > 0x7FFF:              # the server reads the count as a signed 16-bit number
+        raise ValueError("too many assets in one type file")
+    for row in sorted(added, key=lambda r: _signed(r[0])):
+        k = 0
+        while k < len(rows) and _signed(rows[k][0]) < _signed(row[0]):
+            k += 1
+        rows.insert(k, row)
+    return bytes(data[:4]) + struct.pack("<H", len(rows)) + b"".join(r for _, r in rows) + bytes(data[p:])
+
+
+def _cache_str(data, p):
+    n, = struct.unpack_from("<i", data, p)
+    return data[p + 4:p + 4 + n].rstrip(b"\0").decode("latin1"), p + 4 + n
+
+
+def _cache_put(s):
+    b = s.encode("latin1") + b"\0"
+    return struct.pack("<i", len(b)) + b
+
+
+def parse_package_cache(data):
+    """AssetPackageCache.bin: [(guid bytes, class)], [(class, [packages])], rest of the file (kept as is)."""
+    n, = struct.unpack_from("<I", data, 0)
+    p, guids = 4, []
+    for _ in range(n):
+        g = data[p:p + 8]
+        s, p = _cache_str(data, p + 8)
+        guids.append((g, s))
+    m, = struct.unpack_from("<I", data, p)
+    p += 4
+    classes = []
+    for _ in range(m):
+        s, p = _cache_str(data, p)
+        c, = struct.unpack_from("<I", data, p)
+        p += 4
+        pk = []
+        for _ in range(c):
+            x, p = _cache_str(data, p)
+            pk.append(x)
+        classes.append((s, pk))
+    return guids, classes, data[p:]
+
+
+def add_package_cache(data, entries):
+    """AssetPackageCache.bin with the modules' classes added (classes it already knows are left alone)."""
+    guids, classes, rest = parse_package_cache(data)
+    known_g = {s.lower() for _, s in guids}
+    known_c = {s.lower() for s, _ in classes}
+    for e in entries:
+        cls = e.get("class")
+        if not cls:
+            continue
+        if cls.lower() not in known_g:
+            guids.append((struct.pack("<Q", int(e["guid"], 16)), cls))
+            known_g.add(cls.lower())
+        if cls.lower() not in known_c:
+            classes.append((cls, list(e.get("packages", []))))
+            known_c.add(cls.lower())
+    out = bytearray(struct.pack("<I", len(guids)))
+    for g, s in guids:
+        out += g + _cache_put(s)
+    out += struct.pack("<I", len(classes))
+    for s, pk in classes:
+        out += _cache_put(s) + struct.pack("<I", len(pk))
+        for x in pk:
+            out += _cache_put(x)
+    return bytes(out) + rest
+
+
 # ======================================================================== .string files (Data/Game/Loco)
 STRING_FILES = {0: "3FFFFFFFFFFFFFFF", 1: "7FFFFFFFFFFFFFFF", 2: "BFFFFFFFFFFFFFFF", 3: "FFFFFFFFFFFFFFFF"}
 
@@ -429,6 +548,7 @@ class Module:
         self.name = self.id
         self.version = self.author = self.description = ""
         self.error = None
+        self.waiting = None                      # "needs …": a module it requires is missing or off
         self.m = {}
         try:
             self.m = _load_json(os.path.join(folder, "module.json"), None)
@@ -458,6 +578,14 @@ class Module:
     def textures(self):
         return list(self.m.get("textures", []))
 
+    @property
+    def assets(self):
+        return list(self.m.get("assets", []))
+
+    @property
+    def requires(self):
+        return [str(x) for x in self.m.get("requires", [])]
+
     def calligraphy(self):
         rel = self.m.get("calligraphy")
         if not rel:
@@ -482,8 +610,10 @@ class Module:
         """Game files (relative to the game folder) this module changes."""
         t = set(self.files)
         t.update("UnrealEngine3/MarvelGame/CookedPCConsole/" + x["package"] for x in self.textures)
-        if self.m.get("calligraphy"):
+        if self.m.get("calligraphy") or self.assets:
             t.add(CALLIGRAPHY)
+        if any(a.get("class") for a in self.assets):
+            t.add(PACKAGE_CACHE)
         for lang, lines in self.strings().items():
             t.update(string_file_for(lang, sid) for sid in lines)
         return sorted(t)
@@ -492,7 +622,7 @@ class Module:
         k = []
         if self.m.get("calligraphy"):
             k.append("Game data")
-        if self.files:
+        if self.files or self.assets:
             k.append("Models & effects")
         if self.textures:
             k.append("Icons")
@@ -526,6 +656,24 @@ class Library:
         order = [d for d in self.state["order"] if d in found] + [d for d in found if d not in self.state["order"]]
         self.state["order"] = order
         self.modules = [found[d] for d in order]
+        self._check_requires()
+
+    def _check_requires(self):
+        """A module that needs another one (e.g. a hero made from Playable Jubilee's powers) only goes in while
+        that one is installed and on; otherwise its prototypes would point at things the game doesn't have."""
+        for _ in range(len(self.modules) + 1):
+            changed = False
+            for m in self.modules:
+                missing = []
+                for r in m.requires:
+                    dep = self.find(r)
+                    if dep is None or dep.error or dep.waiting or not self.enabled(dep):
+                        missing.append(dep.name if dep else r)
+                waiting = ("needs " + ", ".join(missing) + " (install it and turn it on)") if missing else None
+                if waiting != m.waiting:
+                    m.waiting, changed = waiting, True
+            if not changed:
+                break
 
     def save(self):
         os.makedirs(ROOT, exist_ok=True)
@@ -541,10 +689,11 @@ class Library:
             en.append(key)
         self.state["enabled"] = en
         self.save()
+        self._check_requires()
 
     def active(self):
         """Enabled modules, lowest priority first (the top of the list is applied last and wins)."""
-        return [m for m in reversed(self.modules) if self.enabled(m) and not m.error]
+        return [m for m in reversed(self.modules) if self.enabled(m) and not m.error and not m.waiting]
 
     def find(self, key):
         return next((m for m in self.modules if os.path.basename(m.folder) == key or m.id == key), None)
@@ -637,16 +786,24 @@ def _build(rel, base, mods_for_file):
         sip = Sip(base)
         pdir = sip.read("Calligraphy/Prototype.directory")
         bdir = sip.read("Calligraphy/Blueprint.directory")
+        types = {}
         for m in mods_for_file:
-            spec, loose = m.calligraphy()
+            spec, loose = m.calligraphy() or ({}, [])
             for name, full in loose:
                 with open(full, "rb") as f:
                     sip.put("Calligraphy/" + name, f.read())
             bdir = add_blueprints(bdir, spec.get("blueprints", []))
             pdir = add_prototypes(pdir, spec.get("prototypes", []))
+            for a in m.assets:
+                types.setdefault(a["type"].replace("\\", "/"), []).append(a)
         sip.put("Calligraphy/Prototype.directory", pdir)
         sip.put("Calligraphy/Blueprint.directory", bdir)
+        for rel_type, entries in types.items():
+            name = _sip_name(sip, "Calligraphy/" + rel_type)
+            sip.put(name, add_assets(sip.read(name), entries))
         return sip.build()
+    if rel == PACKAGE_CACHE:
+        return add_package_cache(base, [a for m in mods_for_file for a in m.assets])
     out = base
     for m in mods_for_file:
         if rel in m.files:
@@ -660,6 +817,15 @@ def _build(rel, base, mods_for_file):
             if mine:
                 out = add_strings(out, mine)
     return out
+
+
+def _sip_name(sip, name):
+    """The archive's own spelling of an entry name (paths are compared case-insensitively, either slash)."""
+    want = name.replace("\\", "/").lower()
+    for have in sip.entries:
+        if have.replace("\\", "/").lower() == want:
+            return have
+    raise ValueError(f"{name} is not in Calligraphy.sip")
 
 
 def _string_ids(data):
@@ -679,10 +845,20 @@ def _already_in(rel, data, mods_for_file):
         return None
     for m in mods_for_file:
         if rel == CALLIGRAPHY:
-            spec, _loose = m.calligraphy()
+            spec, _loose = m.calligraphy() or ({}, [])
             sip = Sip(data)
             have = _directory_ids(sip.read("Calligraphy/Prototype.directory"), proto=True)
-            if any(int(e["id"], 16) in have for e in spec.get("prototypes", [])):
+            if any(int(e["id"], 16) in have for e in (spec or {}).get("prototypes", [])):
+                return m
+            for a in m.assets:
+                name = _sip_name(sip, "Calligraphy/" + a["type"])
+                if int(a["id"], 16) in _type_ids(sip.read(name)):
+                    return m
+            continue
+        if rel == PACKAGE_CACHE:
+            _g, classes, _rest = parse_package_cache(data)
+            known = {c.lower() for c, _ in classes}
+            if any(a.get("class") and a["class"].lower() in known for a in m.assets):
                 return m
             continue
         if rel in m.files and _md5(m.path(os.path.join("files", rel))) == _md5b(data):
@@ -749,6 +925,13 @@ def release_all(game_root, progress=None, lib=None):
     return changed
 
 
+APPLY_REV = 2      # bump when apply builds files differently, so files made by an older launcher are rebuilt
+
+
+def _signature(mods_for_file):
+    return [m.id + "@" + m.version for m in mods_for_file] + ([f"apply-rev-{APPLY_REV}"] if any(m.assets for m in mods_for_file) else [])
+
+
 def apply(game_root, progress=None, lib=None):
     """Make the game files match the active modules. Returns a list of the files written or restored."""
     lib, want, gone = plan(game_root, lib)
@@ -785,7 +968,7 @@ def apply(game_root, progress=None, lib=None):
         full, cur = _current(game_root, rel)
         rec = lib.state["files"].get(rel)
         bp = _base_path(rel)
-        if rec and cur == rec.get("out") and rec.get("mods") == [m.id + "@" + m.version for m in mods_for_file]:
+        if rec and cur == rec.get("out") and rec.get("mods") == _signature(mods_for_file):
             continue                              # already up to date
         if progress:
             progress(None, "Applying modules: " + os.path.basename(rel))
@@ -801,7 +984,7 @@ def apply(game_root, progress=None, lib=None):
             rec = {"base": cur}
         out = _build(rel, base, mods_for_file)
         _write_atomic(full, out)
-        rec.update(out=_md5b(out), mods=[m.id + "@" + m.version for m in mods_for_file])
+        rec.update(out=_md5b(out), mods=_signature(mods_for_file))
         lib.state["files"][rel] = rec
         lib.save()
         done.append(rel)

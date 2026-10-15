@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.0
+- **Modules can add new models.** A module can now register new model names, so a hero made with MHO Hero Builder
+  can have its own model package instead of replacing another hero's costume. The launcher adds the name to the
+  game data (`Calligraphy.sip`) and to the client's package list (`AssetPackageCache.bin`), and takes both out again
+  when the module is turned off. Format: `assets` in `docs/modules.md`.
+- **Modules can build on other modules** (`requires`). A hero made from Playable Jubilee's powers only goes in while
+  Playable Jubilee is installed and on; otherwise the Modules tab shows "needs Playable Jubilee".
+- Module format 2 for these; older launchers ask to be updated instead of installing them.
+- New model names are put in their sorted place in the game data (the client searches those lists by id; an
+  entry added at the end made it stop with "Assertion failed: i>=0 && (i<ArrayNum…" when the hero appeared).
+  Game files written by the first 1.8.0 test build are rebuilt by the next Apply changes or PLAY.
+- Tests for modules: `python3 -B -m unittest discover -s tests`.
+
 ## v1.7.1
 - **Fix: "Couldn't apply modules … texture not found in ICO__MarvelUIIcons_SF.upk".** Module icons now go into the icon package whether it is the game's original (compressed) or one the Mod Manager rebuilt. If another mod changed one of those icons, that single icon is skipped (noted in `logs/modules.log`) instead of stopping the whole module.
 

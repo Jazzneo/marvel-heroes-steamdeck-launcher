@@ -10,6 +10,7 @@ files/<path in the game folder>          whole files the module replaces or adds
 textures/<anything>                      raw texture data patched into an icon package
 calligraphy.json                         new prototype / blueprint directory entries
 calligraphy/<path inside Calligraphy/>   files added to (or replacing files in) Data/Game/Calligraphy.sip
+(module.json "assets")                   new model names: Calligraphy asset types + AssetPackageCache.bin
 strings/<lang>.json                      new text lines
 ```
 
@@ -54,6 +55,26 @@ strings/<lang>.json                      new text lines
   The files themselves go in `calligraphy/` with their path inside `Calligraphy/`. A file that already exists in the
   game (for example a team-up prototype the module changes) is replaced. An entry whose id is already in the
   directory isn't added twice.
+* **assets** (MH Launcher 1.8.0 and later): new model names, for a hero or costume with its own model package.
+  The client finds a costume's model through its Unreal class name: the costume prototype points to an asset in
+  `Entity/Types/UnrealClass.type`, the asset's name `X` is loaded from `UC__X_SF.upk`, and `AssetPackageCache.bin`
+  says which packages hold the class `marvelgamecontent.X` (parent class packages first).
+
+  ```json
+  "assets": [{"type": "Entity/Types/UnrealClass.type", "id": "…16 hex digits…", "guid": "…16 hex digits…",
+              "name": "MarvelHB_MyHero", "class": "marvelgamecontent.MarvelHB_MyHero",
+              "packages": ["uc__marvelteamup_sf", "uc__marvelhb_myhero_sf"]}]
+  ```
+
+  The asset goes into the type file inside `Calligraphy.sip`; `class` and `packages` go into
+  `UnrealEngine3/MarvelGame/CookedPCConsole/AssetPackageCache.bin` (the guid is the class's key there too). Ship the
+  package itself in `files/`. Like prototypes, keep the id and guid the same between versions. Turning the module off
+  takes all three out again.
+* **requires** (format 2): ids of modules this one builds on, e.g. `["playable-jubilee"]` for a hero that uses
+  Jubilee's powers. The module is only applied while every one of them is installed and on; otherwise the Modules
+  tab shows "needs …" and leaves it out.
+* **format**: use `2` when the module has `assets` or `requires` (older launchers then say "update MH Launcher"
+  instead of installing something they can't apply); `1` otherwise.
 * **strings**: `{"<16-hex-digit string id>": "text"}`. The line goes into the `<lang>.all_…string` file chosen by the
   id's top two bits (like the game does). Only new ids are added; existing lines are never changed by modules.
 

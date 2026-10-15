@@ -192,7 +192,9 @@ A **module** adds things a mod can't: new playable heroes, new powers, new gear,
 * **On a friend's server** modules are taken out for that session (their server only knows its own game data); your next PLAY on your own server puts them back.
 * When two modules change the same file, the one **higher** in the list is applied last and wins.
 
-Making modules: see [docs/modules.md](docs/modules.md).
+* Modules made with **MH Launcher 1.8** features (new model names, pictures and gear from [MHO Hero Builder](https://github.com/Jazzneo/mho-hero-builder), or `requires` another module) need MH Launcher 1.8 or newer; an older launcher asks you to update instead of installing them.
+
+Making modules: build your own hero with [MHO Hero Builder](https://github.com/Jazzneo/mho-hero-builder), or by hand: see [docs/modules.md](docs/modules.md).
 
 ## Where things are stored
 

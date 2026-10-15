@@ -124,6 +124,9 @@ class ModulesScreen(Screen):
                 return
             self.reload()
             app.toast("Modules applied" + (f" ({len(res)} file(s) changed)" if res else " – nothing to change"), "ok", 6)
+            for m in self.lib.modules:
+                if self.lib.enabled(m) and m.waiting:
+                    app.toast(f"{m.name} wasn't applied: it {m.waiting}", "warn", 10)
 
         def work(p):
             try:
@@ -277,9 +280,10 @@ class ModulesScreen(Screen):
             text(surf, m.name, (r.x + 50, r.y + 9), 18, C["text"] if on else C["muted"], True, max_w=r.w - 130)
             sub = " · ".join(x for x in [("by " + m.author) if m.author else "", ("v" + m.version) if m.version else "",
                                           ", ".join(m.kinds())] if x)
-            if m.error:
-                sub = "⚠ " + m.error
-            text(surf, sub, (r.x + 50, r.y + 35), 13, C["red"] if m.error else C["dim"], max_w=r.w - 70)
+            if m.error or (on and m.waiting):
+                sub = "⚠ " + (m.error or m.waiting)
+            text(surf, sub, (r.x + 50, r.y + 35), 13, C["red"] if m.error else C["yellow"] if on and m.waiting
+                 else C["dim"], max_w=r.w - 70)
         ws.append(ui.ListView("mo_list", (X0, Y0 + 100, LIST_W, CH - 100), items, self.index,
                               lambda i: setattr(self, "index", i), self.toggle, 64, render,
                               "No modules yet – press Install module…", on_alt=self.remove))
